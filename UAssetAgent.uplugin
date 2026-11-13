@@ -1,0 +1,11 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "UAsset Agent",
+  "Description": "JSON Blueprint editing commandlet for AI agents. Targets Unreal Engine 5.4.",
+  "Category": "Editor",
+  "CanContainContent": false,
+  "EnabledByDefault": true,
+  "Modules": [{"Name": "UAssetAgent", "Type": "Editor", "LoadingPhase": "Default"}]
+}

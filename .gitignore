@@ -1,0 +1,13 @@
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.vs/
+tests/Host/Plugins/
+tests/Host/Content/
+build/
+dist/

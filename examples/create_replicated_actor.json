@@ -1,0 +1,33 @@
+{
+  "action": "create",
+  "asset": "/Game/AgentExamples/BP_AgentHealth",
+  "parent_class": "/Script/Engine.Actor",
+  "operations": [
+    {
+      "op": "add_variable",
+      "name": "Health",
+      "type": {"category": "double"},
+      "default": "100.0",
+      "replicated": true,
+      "rep_notify": "OnRep_Health"
+    },
+    {"op": "set_default", "property": "bReplicates", "value": "True"},
+    {
+      "op": "add_node",
+      "id": "reset_event",
+      "kind": "custom_event",
+      "name": "ServerResetHealth",
+      "replication": "server",
+      "reliable": true,
+      "x": 0,
+      "y": 400
+    },
+    {"op": "add_node", "id": "set_health", "kind": "set", "variable": "Health", "x": 400, "y": 400},
+    {"op": "set_pin_default", "node": "set_health", "pin": "Health", "value": "100.0"},
+    {
+      "op": "connect",
+      "from": {"node": "reset_event", "pin": "then"},
+      "to": {"node": "set_health", "pin": "execute"}
+    }
+  ]
+}

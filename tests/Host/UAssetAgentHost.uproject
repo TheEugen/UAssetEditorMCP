@@ -1,0 +1,7 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.4",
+  "Category": "Tests",
+  "Description": "Disposable integration-test project for UAsset Agent",
+  "Plugins": [{"Name": "UAssetAgent", "Enabled": true}]
+}

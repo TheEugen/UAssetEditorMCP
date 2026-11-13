@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "unreal-blueprints": {
+      "command": "python",
+      "args": [
+        "F:/PP-GPT/UassetEditor/uasset_agent.py",
+        "--project", "D:/YourGame/YourGame.uproject",
+        "--engine", "F:/UnrealMarketplace/UE_5.4",
+        "mcp"
+      ],
+      "env": {"PYTHONUTF8": "1"}
+    }
+  }
+}
