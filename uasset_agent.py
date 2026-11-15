@@ -14,7 +14,7 @@ import sys
 import time
 import uuid
 
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 ROOT = Path(__file__).resolve().parent
 
@@ -33,9 +33,26 @@ def validate_request(request):
     if not isinstance(request, dict):
         raise AgentError("Request must be a JSON object")
     action = request.get("action")
-    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create"}:
-        raise AgentError("action must be list, inspect, functions, apply or create")
-    if action in {"inspect", "apply", "create"}:
+    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors"}:
+        raise AgentError("action must be list, inspect, functions, apply, create, compile, components or redirectors")
+    if action in {"list", "compile", "redirectors"}:
+        path = request.get("path", "/Game")
+        if (not isinstance(path, str) or not (path == "/Game" or path.startswith("/Game/")) or
+                any(c in path for c in (".", "\\", ":")) or
+                any(not part for part in path.split("/")[1:])):
+            raise AgentError("path must be a package or folder path under /Game without an extension")
+    if "response_mode" in request or "graph" in request:
+        if action not in {"inspect", "apply", "create"}:
+            raise AgentError("response_mode and graph require inspect, apply or create")
+        mode = request.get("response_mode", "full")
+        if not isinstance(mode, str) or mode not in {"full", "summary", "graph"}:
+            raise AgentError("response_mode must be full, summary or graph")
+        if mode == "graph":
+            if not isinstance(request.get("graph"), str) or not request["graph"].strip():
+                raise AgentError("response_mode graph requires a nonempty graph name or object path")
+        elif "graph" in request:
+            raise AgentError("graph requires response_mode graph")
+    if action in {"inspect", "components", "apply", "create"}:
         asset = request.get("asset", "")
         if (not isinstance(asset, str) or not asset.startswith("/Game/") or
                 any(c in asset for c in (".", "\\", ":")) or
@@ -251,9 +268,19 @@ def install_plugin(project, source=ROOT, update=False):
 
 def tool_definitions():
     asset = {"type": "string", "description": "Package path such as /Game/Blueprints/BP_Player"}
+    response_options = {
+        "response_mode": {"type": "string", "enum": ["full", "summary", "graph"], "default": "full",
+                          "description": "summary omits nodes, pins and class defaults; graph returns one graph. full preserves the complete snapshot."},
+        "graph": {"type": "string", "description": "Required with response_mode graph: exact graph name or object path from a summary."}}
     definitions = []
     specs = [
         ("blueprint_list", "List Blueprint assets under /Game.", {"path": {"type": "string"}}, []),
+        ("blueprint_redirectors", "List on-disk redirectors recursively, including missing destinations. Reports destination, chain and resolved/missing/cycle/unknown status from asset registry metadata; does not fix or delete assets.",
+         {"path": {"type": "string", "default": "/Game"}}, []),
+        ("blueprint_components", "Inspect local, inherited Blueprint and native component template defaults without graph output. Returns component selectors and file revision for set_component_default operations.",
+         {"asset": asset}, ["asset"]),
+        ("blueprint_compile", "Compile one Blueprint or recursively compile a folder in one Unreal process, without saving. Returns counts and only failures with diagnostics. Includes Blueprint subclasses. Editor must be closed; allow a long timeout for /Game.",
+         {"path": {"type": "string", "default": "/Game", "description": "Blueprint package or recursive folder path under /Game; defaults to the entire /Game tree."}}, []),
         ("blueprint_inspect", "Read graphs, node GUIDs, pin names, defaults, replication and the file revision before editing.", {"asset": asset}, ["asset"]),
         ("blueprint_functions", "Discover callable functions and parameter types on a class, e.g. /Script/Engine.KismetSystemLibrary.",
          {"class": {"type": "string"}, "search": {"type": "string"}}, ["class"]),
@@ -265,6 +292,8 @@ def tool_definitions():
           "dry_run": {"type": "boolean"}}, ["asset", "operations"]),
         ("blueprint_protocol", "Read the complete operation format, node types, pin references and examples before constructing an edit batch.", {}, [])]
     for name, description, properties, required in specs:
+        if name in {"blueprint_inspect", "blueprint_apply", "blueprint_create"}:
+            properties.update(response_options)
         definitions.append({"name": name, "description": description,
                             "inputSchema": {"type": "object", "properties": properties,
                                             "required": required, "additionalProperties": False}})
@@ -350,8 +379,16 @@ def main(argv=None):
     install.add_argument("--update", action="store_true")
     listing = sub.add_parser("list", help="List Blueprint assets")
     listing.add_argument("--path", default="/Game")
+    redirectors = sub.add_parser("redirectors", help="List redirectors and destination status without loading them")
+    redirectors.add_argument("--path", default="/Game")
+    components = sub.add_parser("components", help="Inspect component templates and defaults without graphs")
+    components.add_argument("asset")
+    compile_command = sub.add_parser("compile", help="Compile a Blueprint or folder without saving; return only failures")
+    compile_command.add_argument("path", nargs="?", default="/Game")
     inspect = sub.add_parser("inspect", help="Export a Blueprint as JSON")
     inspect.add_argument("asset")
+    inspect.add_argument("--response-mode", choices=("full", "summary", "graph"), default="full")
+    inspect.add_argument("--graph", help="Graph name or object path; requires --response-mode graph")
     functions = sub.add_parser("functions", help="Discover Blueprint callable functions")
     functions.add_argument("class_path")
     functions.add_argument("--search", default="")
@@ -380,9 +417,13 @@ def main(argv=None):
             elif args.command == "functions":
                 request = {"action": "functions", "class": args.class_path, "search": args.search}
             elif args.command == "inspect":
-                request = {"action": "inspect", "asset": args.asset}
+                request = {"action": "inspect", "asset": args.asset, "response_mode": args.response_mode}
+                if args.graph is not None:
+                    request["graph"] = args.graph
+            elif args.command == "components":
+                request = {"action": "components", "asset": args.asset}
             else:
-                request = {"action": "list", "path": args.path}
+                request = {"action": args.command, "path": args.path}
             result = client.execute(request)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0 if result.get("ok") else 1

@@ -48,6 +48,28 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(captured[0][1], str(self.project))
         self.assertTrue(Path(result["logs"]).is_dir())
 
+    def test_compile_and_response_options_are_validated_before_launch(self):
+        for request in [
+                {"action": "compile"}, {"action": "compile", "path": "/Game/Folder/BP_One"},
+                {"action": "inspect", "asset": "/Game/A", "response_mode": "summary"},
+                {"action": "apply", "asset": "/Game/A", "operations": [],
+                 "response_mode": "graph", "graph": "EventGraph"}]:
+            agent.validate_request(request)
+        for request in [
+                {"action": "compile", "path": path} for path in
+                [None, [], "/Engine", "/Gameplay", "/Game/../A", "/Game/A.uasset", "/Game/A/", "/Game//A"]
+        ] + [
+                {"action": "compile", "response_mode": "summary"},
+                {"action": "inspect", "asset": "/Game/A", "response_mode": []},
+                {"action": "inspect", "asset": "/Game/A", "response_mode": "brief"},
+                {"action": "inspect", "asset": "/Game/A", "response_mode": "graph"},
+                {"action": "inspect", "asset": "/Game/A", "response_mode": "graph", "graph": " "},
+                {"action": "inspect", "asset": "/Game/A", "graph": "EventGraph"}]:
+            with self.subTest(request=request), patch.object(agent, "require_editor_closed") as closed:
+                with self.assertRaises(agent.AgentError):
+                    self.client.execute(request)
+                closed.assert_not_called()
+
     def test_missing_response_and_timeout_are_not_reported_as_success(self):
         for effect in [subprocess.CompletedProcess([], 7), subprocess.TimeoutExpired("Unreal", 1)]:
             with patch.object(agent, "require_editor_closed"), patch.object(agent.subprocess, "run") as run:
@@ -105,8 +127,68 @@ class McpTests(unittest.TestCase):
     def test_handshake_and_discovery(self):
         self.assertEqual(self.rpc("initialize", {"protocolVersion": "2024-11-05"})["result"]["protocolVersion"], "2024-11-05")
         names = {d["name"] for d in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(len(names), 6)
+        self.assertEqual(len(names), 9)
         self.assertIn("blueprint_apply", names)
+        self.assertIn("blueprint_compile", names)
+        self.assertIn("blueprint_components", names)
+        self.assertIn("blueprint_redirectors", names)
+
+    def test_component_and_redirector_tools_and_cli(self):
+        requests = []
+
+        class FakeClient:
+            def execute(self, request):
+                agent.validate_request(request)
+                requests.append(request)
+                return {"ok": True}
+
+        for action, args in [("components", {"asset": "/Game/Ship"}), ("redirectors", {"path": "/Game/Polynesien"})]:
+            result = agent.dispatch_rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                         "params": {"name": "blueprint_" + action, "arguments": args}}, FakeClient())["result"]
+            self.assertFalse(result["isError"])
+            self.assertEqual(requests[-1], dict(args, action=action))
+        with patch.object(agent, "Client", return_value=FakeClient()), patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(agent.main(["--project", "dummy", "components", "/Game/Ship"]), 0)
+            self.assertEqual(requests[-1], {"action": "components", "asset": "/Game/Ship"})
+            self.assertEqual(agent.main(["--project", "dummy", "redirectors", "--path", "/Game/Polynesien"]), 0)
+            self.assertEqual(requests[-1], {"action": "redirectors", "path": "/Game/Polynesien"})
+        for request in [{"action": "components"}, {"action": "components", "asset": "/Game/Ship.uasset"},
+                        {"action": "redirectors", "path": "/Game/../Ship"}]:
+            with self.assertRaises(agent.AgentError):
+                agent.validate_request(request)
+
+    def test_compile_failures_and_response_selection_reach_mcp(self):
+        requests = []
+        failure = {"ok": False, "saved": False, "checked": 2, "passed": 1, "failed": 1,
+                   "failures": [{"asset": "/Game/Broken", "diagnostics": [{"severity": "error", "message": "Missing function"}]}]}
+
+        class FakeClient:
+            def execute(self, request):
+                agent.validate_request(request)
+                requests.append(request)
+                return failure if request["action"] == "compile" else {"ok": True, "revision": "a" * 40}
+
+        for name, args in [
+                ("blueprint_compile", {"path": "/Game"}),
+                ("blueprint_inspect", {"asset": "/Game/A", "response_mode": "graph", "graph": "EventGraph"}),
+                ("blueprint_apply", {"asset": "/Game/A", "operations": [], "expected_revision": "a" * 40, "response_mode": "summary"}),
+                ("blueprint_create", {"asset": "/Game/A", "operations": [], "response_mode": "summary"})]:
+            response = agent.dispatch_rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                           "params": {"name": name, "arguments": args}}, FakeClient())["result"]
+            self.assertEqual(requests[-1], dict(args, action=name.removeprefix("blueprint_")))
+            self.assertEqual(response["isError"], name == "blueprint_compile")
+            if name == "blueprint_compile":
+                self.assertEqual(json.loads(response["content"][0]["text"]), failure)
+
+    def test_cli_compile_and_graph_selection(self):
+        with patch.object(agent, "Client") as client, patch("sys.stdout", new_callable=io.StringIO):
+            client.return_value.execute.return_value = {"ok": True}
+            self.assertEqual(agent.main(["--project", "dummy", "compile"]), 0)
+            client.return_value.execute.assert_called_with({"action": "compile", "path": "/Game"})
+            self.assertEqual(agent.main(["--project", "dummy", "inspect", "/Game/A", "--response-mode", "graph", "--graph", "EventGraph"]), 0)
+            client.return_value.execute.assert_called_with({"action": "inspect", "asset": "/Game/A", "response_mode": "graph", "graph": "EventGraph"})
+            client.return_value.execute.return_value = {"ok": False, "failed": 1}
+            self.assertEqual(agent.main(["--project", "dummy", "compile", "/Game/A"]), 1)
 
     def test_invalid_messages_and_unknown_methods(self):
         self.assertEqual(agent.dispatch_rpc([], None)["error"]["code"], -32600)

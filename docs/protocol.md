@@ -30,6 +30,94 @@ compile verifies graph validity, not gameplay or multiplayer correctness.
 {"action":"inspect","asset":"/Game/Characters/BP_Player"}
 ```
 
+### Redirectors
+
+```json
+{"action":"redirectors","path":"/Game/Polynesien"}
+```
+
+Returns `redirectors` separately from the Blueprint-only `list` action. `path`
+defaults to `/Game` and selects a folder recursively. Each entry contains its
+package `asset`, `object_path`, immediate `destination` (when the registry tag
+is available), `chain`, and `status`:
+
+- `resolved`: the chain ends at an on-disk asset registered at
+  `resolved_destination`.
+- `missing`: a destination is empty or its package/object is absent.
+- `cycle`: a redirector appears twice in the chain.
+- `unknown`: missing/malformed metadata, a native script destination, or the
+  256-hop traversal limit prevented a conclusion.
+
+This reads on-disk asset registry metadata without loading or following the
+redirector UObject, so a broken target cannot hide the redirector. `resolved`
+means the target exists in the registry, not that the asset can compile or load
+successfully. This action does not fix references or delete redirector files.
+Blueprint inspection/edit requests reject paths that redirect to a different
+package; use the destination package path instead.
+
+### Compact inspection and edit responses
+
+`inspect`, `apply` and `create` accept `response_mode`:
+
+- `full` (default): the existing snapshot, including variables, class defaults,
+  graphs, nodes and pins.
+- `summary`: asset and parent class, variable and component metadata, and graph names, object
+  paths, node counts and event names/GUIDs/replication/reliability. Omits full
+  nodes, pins, class defaults and component defaults. Useful for finding graphs and auditing RPCs.
+- `graph`: asset and parent class plus exactly one complete graph; requires
+  `graph` with an exact name or object path from the summary. Omits variables,
+  class defaults and other graphs. An absent or ambiguous graph is an error;
+  use an object path to disambiguate nested graphs with identical names.
+
+```json
+{"action":"inspect","asset":"/Game/Characters/BP_Player","response_mode":"summary"}
+{"action":"inspect","asset":"/Game/Characters/BP_Player","response_mode":"graph","graph":"EventGraph"}
+```
+
+Only the `blueprint` snapshot changes. Revisions, backup paths, diagnostics,
+node aliases and save/dry-run status retain their usual meaning. Graph selection
+is checked against the resulting Blueprint before any save, including for edits.
+Use `full` to read class defaults before changing them.
+
+### Batch compile check
+
+```json
+{"action":"compile","path":"/Game"}
+{"action":"compile","path":"/Game/Characters"}
+{"action":"compile","path":"/Game/Characters/BP_Player"}
+```
+
+`path` defaults to `/Game`. An existing package selects that asset; otherwise
+the path selects a folder recursively. One commandlet process discovers and
+compiles all matching Blueprint assets, including Blueprint subclasses such as
+animation and widget Blueprints. Their **editing** remains unsupported.
+Level Blueprints embedded in maps and content outside `/Game` are not scanned.
+
+The command never saves assets or creates asset backups. Logs and derived data
+can still be written. It continues after ordinary load/compile failures and
+returns `checked`, `passed`, `failed`, and `failures`. Each failure contains
+`asset`, `error`, and compiler `diagnostics` when available. Passing assets,
+including assets with warnings only, are omitted from the response. An empty
+match is an error, avoiding a false success for a mistyped path.
+
+```json
+{
+  "ok":false, "saved":false, "protocol_version":1, "path":"/Game",
+  "checked":2, "passed":1, "failed":1,
+  "failures":[{"asset":"/Game/BP_Broken","error":"Blueprint compilation failed",
+    "diagnostics":[{"severity":"error","message":"Compiler error text"}]}],
+  "error":"One or more Blueprints failed to compile"
+}
+```
+
+Any failure produces `ok:false`, a nonzero CLI exit code and an MCP tool error
+with the structured report intact. Crashes/timeouts can prevent a complete
+report; inspect the retained logs in that case. Set a larger client and MCP host
+timeout for a project-wide check, for example CLI `--timeout 1800` before the
+`compile` subcommand. Rebuild changed C++ first and keep the project editor closed.
+
+### Function lookup and edits
+
 ```json
 {"action":"functions","class":"/Script/Engine.KismetSystemLibrary","search":"PrintString"}
 ```
@@ -116,6 +204,66 @@ This changes class defaults, including editable inherited defaults. It does not
 edit placed actors or live game instances. Added member defaults persist in the
 Blueprint variable descriptor as well as the generated class default object.
 
+```json
+{"op":"delete_variable","name":"UnusedReplicatedValue"}
+```
+
+Deletes a member declared by this Blueprint, including replicated members.
+Inherited/native variables, component variables, and local function variables
+are not eligible. The operation scans the asset registry and uses Unreal's
+variable-reference search to reject known uses in this Blueprint and hard
+referencers; remove those uses first. It does not automatically delete getters,
+setters or a RepNotify function. Dynamic access by name and code references are
+outside this search. Compile affected Blueprints after changing public members.
+
+## Re-parenting
+
+```json
+{"op":"reparent","parent_class":"/Script/MyGame.NewShipBase"}
+```
+
+Accepts a native class path or generated Blueprint class path such as
+`/Game/Ships/BP_Base.BP_Base_C`. Rejects self/descendant cycles, invalid parents,
+local-variable collisions with inherited members, and changes between the
+Actor, ActorComponent and UObject families. The current Blueprint must compile
+before the batch, as with other edits.
+
+Re-parenting refreshes nodes, repairs SCS root references, and uses Unreal's
+delta-serialization compile options. Follow it with any necessary graph repairs
+in the same batch; the resulting Blueprint must compile before saving. A new
+parent can remove inherited functions, components or defaults from the previous
+parent, so inspect the dry-run result before saving. Other assets are not saved
+or migrated by this operation; run a batch compile on affected children/callers.
+
+## Component-template defaults
+
+```json
+{"action":"components","asset":"/Game/Ships/BP_Ship"}
+```
+
+Returns `components` and the file `revision` without graph output. Each component
+has a stable `id`, `name`, `class`, `source` (`local`, `inherited`, or `native`),
+`inherited`, `editable`, and editable/Blueprint-visible `defaults` in Unreal text
+format. Full Blueprint inspection also includes these; summaries omit defaults.
+
+```json
+{"op":"set_component_default","component":"Hull","property":"RelativeLocation","value":"(X=0,Y=0,Z=25)"}
+{"op":"set_component_default","component":"native:CapsuleComponent","property":"CapsuleRadius","value":"55"}
+```
+
+Use the component `id` from inspection, or a unique component name. Local SCS
+components edit their templates. Inherited Blueprint components create/update
+an override owned by this Blueprint; the parent's template is unchanged. Native
+components edit the generated class default object's subobject. Inherited
+components must allow inherited editing. Only objects owned by the requested
+Blueprint's package can be modified.
+
+`property` names one top-level reflected property; structs and containers use a
+complete Unreal text value. Values are validated in temporary storage before
+assignment. Transient, edit-constant and instance-only properties are rejected.
+This does not add/remove components, change attachments, edit placed actors,
+or configure components created dynamically by a construction script.
+
 ## Functions
 
 ```json
@@ -176,6 +324,29 @@ replicated event. Events require an event graph. Actor replication, ownership,
 authority checks and server-side validation are still your game's responsibility.
 An RPC definition does not automatically cause the event to be called.
 
+Edit a locally declared existing custom event by node GUID or batch alias:
+
+```json
+{"op":"edit_custom_event","node":"<event GUID>","replication":"none"}
+{"op":"edit_custom_event","node":"<event GUID>","replication":"server","reliable":true}
+{"op":"edit_custom_event","node":"<event GUID>","inputs":[{"name":"Count","type":{"category":"int"}}]}
+```
+
+Omitted fields stay unchanged. `replication: "none"` also clears reliability;
+`reliable:true` without a replicated mode is rejected. `inputs` replaces the
+complete ordered parameter list; `[]` removes every parameter. Names and types
+use the same format as `add_node`. Unchanged parameters retain wiring and
+defaults. Removing, renaming or changing the type of a linked parameter is
+rejected unless it is disconnected first or `allow_break_links:true` is supplied.
+That option explicitly discards affected links on the event and its local calls.
+
+The event GUID and execution wiring are preserved, and call nodes in this
+Blueprint get the updated signature. Inherited overrides and delegate-bound
+events whose signatures are not editable are rejected. External caller assets
+are not rewritten; use the batch compile action to detect required caller
+changes. To remove the unused multicast entirely, use the existing `delete_node`
+operation instead. Run the usual dry-run/apply workflow for all these operations.
+
 ## Connections, defaults and layout
 
 ```json
@@ -201,7 +372,7 @@ conversion nodes are refused: create and wire the conversion explicitly.
 Responses contain `ok`, `saved`, and `protocol_version`. Mutation responses also
 contain `diagnostics`, `blueprint`, `node_ids`, and `previous_revision`. Saved
 requests return a new `revision` and, for existing assets, the `backup` path.
-Dry runs return the proposed graph but no new file revision. The client adds
+Dry runs return the proposed snapshot in the selected mode but no new file revision. The client adds
 `logs`, pointing to retained request/response/Unreal logs for that invocation.
 
 Errors contain `error`, and `operation_index` (zero-based) when an individual
@@ -217,7 +388,7 @@ supported. Source control checkout is manual; read-only assets are rejected.
 The client lock serializes cooperating clients on the same project. Calling the
 commandlet directly bypasses that lock and the editor-process check.
 
-This version does not author components, widgets, animations, materials, levels,
-interfaces, macro libraries, arbitrary custom K2 node classes, variable renames,
-or existing RPC/replication flag changes. Those require additional native handlers.
+This version does not add/remove components or author widgets, animations,
+materials, levels, interfaces, macro libraries, arbitrary custom K2 node classes,
+variable renames or existing variable replication-flag changes.
 Inspection is a graph description, not a lossless asset round-trip format.

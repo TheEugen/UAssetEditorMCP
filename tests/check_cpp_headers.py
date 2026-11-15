@@ -26,8 +26,9 @@ public: UUAssetAgentCommandlet(); virtual int32 Main(const FString& Params) over
 };'''
     translation = output / "Check.cpp"
     translation.write_text(source.read_text(encoding="utf-8").replace('#include "UAssetAgentCommandlet.h"', declaration), encoding="utf-8")
-    includes = [args.msvc / "include", args.sdk / "ucrt", args.sdk / "shared", args.sdk / "um", args.sdk / "winrt",
-                engine / "Source", engine / "Source/Runtime", engine / "Source/Runtime/Core/Public/Windows"]
+    includes = [source.parent, args.msvc / "include", args.sdk / "ucrt", args.sdk / "shared", args.sdk / "um", args.sdk / "winrt",
+                engine / "Source", engine / "Source/Runtime", engine / "Source/Runtime/Core/Public/Windows",
+                engine / "Shaders/Shared"]
     for folder in (engine / "Source/Runtime", engine / "Source/Editor"):
         for name in ("Public", "Classes"):
             includes.extend(folder.rglob(name))
