@@ -569,7 +569,11 @@ public:
             Require(!Names.Contains(PinName), TEXT("Duplicate parameter name: ") + Name);
             Names.Add(PinName);
             UEdGraphPin* Existing = Event->FindPin(PinName);
-            Require(!Existing || Event->UserDefinedPinExists(PinName), TEXT("Parameter conflicts with a built-in pin: ") + Name);
+            // UserDefinedPinExists is not exported by BlueprintGraph in UE 5.4.
+            Require(!Existing || Event->UserDefinedPins.ContainsByPredicate([&PinName](const TSharedPtr<FUserPinInfo>& Pin)
+            {
+                return Pin.IsValid() && Pin->PinName == PinName;
+            }), TEXT("Parameter conflicts with a built-in pin: ") + Name);
             TSharedPtr<FUserPinInfo> Parameter = MakeShared<FUserPinInfo>();
             Parameter->PinName = PinName;
             Parameter->PinType = PinType(Object(P, TEXT("type")));
