@@ -1,6 +1,6 @@
-# UAsset Agent JSON protocol, version 1
+# UAsset Agent JSON protocol, version 2
 
-Targets Unreal Engine 5.4 normal class Blueprints. The plugin loads the actual
+Targets Unreal Engine 5.4.4 normal class, Animation and Widget Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
 Use package paths such as `/Game/Characters/BP_Player`, never filesystem paths
 or `.uasset` extensions. Close this project's Unreal Editor before requests.
@@ -15,7 +15,7 @@ or `.uasset` extensions. Close this project's Unreal Editor before requests.
 
 Each request starts a fresh commandlet process. A dry run's new node GUIDs are
 temporary: refer to nodes created within the batch by aliases, not GUIDs from
-a previous dry run. One request modifies one asset. Operation failure or compile
+a previous dry run. An `apply` request modifies one asset. Operation failure or compile
 failure occurs before saving; edits in that process are discarded. Logs and
 derived data can still be written during dry runs. A successful Blueprint
 compile verifies graph validity, not gameplay or multiplayer correctness.
@@ -90,7 +90,7 @@ Use `full` to read class defaults before changing them.
 `path` defaults to `/Game`. An existing package selects that asset; otherwise
 the path selects a folder recursively. One commandlet process discovers and
 compiles all matching Blueprint assets, including Blueprint subclasses such as
-animation and widget Blueprints. Their **editing** remains unsupported.
+animation and widget Blueprints, which also support the edits described below.
 Level Blueprints embedded in maps and content outside `/Game` are not scanned.
 
 The command never saves assets or creates asset backups. Logs and derived data
@@ -102,7 +102,7 @@ match is an error, avoiding a false success for a mistyped path.
 
 ```json
 {
-  "ok":false, "saved":false, "protocol_version":1, "path":"/Game",
+  "ok":false, "saved":false, "protocol_version":2, "path":"/Game",
   "checked":2, "passed":1, "failed":1,
   "failures":[{"asset":"/Game/BP_Broken","error":"Blueprint compilation failed",
     "diagnostics":[{"severity":"error","message":"Compiler error text"}]}],
@@ -383,12 +383,188 @@ backup before retrying. Never blindly retry a create or a partially reported
 save. Successful save does not prove game behavior; test it in Unreal/PIE.
 
 Backups live under `<project>/Saved/UAssetAgent/Backups/<id>/`. They cover the
-single normal Blueprint `.uasset`; split packages with `.uexp`/`.ubulk` are not
+single Blueprint `.uasset`; split packages with `.uexp`/`.ubulk` are not
 supported. Source control checkout is manual; read-only assets are rejected.
 The client lock serializes cooperating clients on the same project. Calling the
 commandlet directly bypasses that lock and the editor-process check.
 
-This version does not add/remove components or author widgets, animations,
-materials, levels, interfaces, macro libraries, arbitrary custom K2 node classes,
+This version does not add/remove actor components or author animation sequences,
+widget animations, materials, levels, interfaces, macro libraries, arbitrary custom K2 node classes,
 variable renames or existing variable replication-flag changes.
 Inspection is a graph description, not a lossless asset round-trip format.
+
+## Animation Blueprints (protocol 2)
+
+Inspection returns `kind:"animation"`, `skeleton`, `template`, variables, inherited
+CDO defaults and all graphs, including animation, state/transition, layer and
+ordinary function graphs. Full and graph modes include node classes, titles,
+pins and pose links. Anim nodes additionally contain `properties` (Unreal text)
+and `functions` with `InitialUpdateFunction`, `BecomeRelevantFunction` and
+`UpdateFunction` (name or null). Runtime properties use paths such as
+`Node.Sequence`. Summary contains graph metadata and events, never full nodes
+or pin lists. Select nested graphs by their object path when names repeat.
+
+```json
+{"action":"inspect","asset":"/Game/Ship/ABP_Wheel","response_mode":"graph","graph":"AnimGraph"}
+```
+
+All existing event-graph operations work. `delete_node` can remove overrides
+such as BlueprintUpdateAnimation/BlueprintPostEvaluateAnimation, AnimNotify
+events and custom events, subject to the node's normal deletion rules.
+
+The following operations can be combined in one `apply` batch:
+
+```json
+{"op":"reparent","parent_class":"/Script/LyraGame.PP_WheelAnimInstance"}
+{"op":"delete_variable","name":"WheelRotation","retarget_references":true}
+{"op":"delete_function","name":"OldUpdateWheel"}
+{"op":"set_anim_node_function","graph":"AnimGraph","node":"<guid>","slot":"UpdateFunction","function":"NativeUpdateWheel"}
+{"op":"set_anim_node_function","graph":"AnimGraph","node":"<guid>","slot":"BecomeRelevantFunction","function":null}
+{"op":"set_anim_node_property","graph":"AnimGraph","node":"<guid>","property":"Sequence","value":"/Game/Ship/AS_Wheel.AS_Wheel"}
+{"op":"set_anim_node_property","graph":"AnimGraph","node":"<guid>","property":"Node.PlayRate","value":"0.5"}
+{"op":"set_default","property":"RotateSound","value":"/Game/Audio/S_Wheel.S_Wheel"}
+```
+
+- Reparent accepts native UAnimInstance subclasses or generated AnimBP classes;
+  it rejects other parents and inheritance cycles. Nodes refresh after the batch.
+- `retarget_references:true` is opt-in for AnimBPs. It requires an inherited
+  property with exactly the same name and pin type. Local getter/setter nodes
+  retain their GUIDs and wiring while their local member GUID is cleared.
+  If reparenting introduces that member, put `reparent` before the deletion.
+  Explicitly scheduled retarget deletions are prepared before changing the
+  parent, avoiding UE's duplicate-variable renaming. Other collisions fail.
+  References in other assets are not rewritten. Without this flag, v1's
+  reference-checking deletion behavior applies.
+- Bindings accept only the three slots above. The function must exist on the
+  new parent or the AnimBP, carry BlueprintThreadSafe metadata, and match UE's
+  animation-update prototype (animation context and node reference). Unknown,
+  unsafe or incompatible functions fail. Null clears the binding. Define any
+  Blueprint function before binding it; this op does not create functions.
+- Node properties must be editable and accept Unreal text. A bare runtime field
+  is resolved beneath the node's runtime struct; dot paths traverse structs only.
+  Whole runtime structs and function-binding fields cannot be replaced through
+  this op. Setting a property does not disconnect an exposed, wired input pin;
+  use the pin operations when that pin controls the value.
+- `delete_function` accepts an ordinary K2 function graph name, on AnimBPs or
+  Widget BPs. It cannot delete animation layers/state machines; surviving calls
+  to the deleted function must be repaired in the same batch or compilation fails.
+  Explicitly scheduled deletions that collide with a new parent's function are
+  prepared before reparenting, preventing transient duplicate-function errors.
+- `set_default` includes editable inherited native properties, including object
+  references such as sounds, attenuation settings and montages. Specialized
+  defaults are applied after the structural edits compile, then compiled again.
+  Thus they target the final generated class, regardless of their batch position.
+- Specialized batches may repair an initially uncompilable Blueprint; the
+  completed batch must compile before saving. Normal BP precompile behavior is
+  unchanged. New state machines/layers, Control Rig and IK Rig edits are out of scope.
+
+Creation supports test fixtures and ordinary assets:
+
+```json
+{"action":"create","asset":"/Game/__UAssetAgentTests/ABP_Test","kind":"animation","parent_class":"/Script/Engine.AnimInstance","template":true,"operations":[],"dry_run":true,"response_mode":"summary"}
+```
+
+Use `skeleton:"/Game/.../Skeleton.Skeleton"` for a concrete AnimBP, or
+`template:true` for a skeleton-independent template. Creating new anim nodes is
+not exposed; the animation node ops edit existing nodes.
+
+## Widget Blueprints (protocol 2)
+
+Inspection returns `kind:"widget"`, `parent_class`, graphs and `widget_tree`.
+Each widget has `name`, `class`, `parent` (empty for the root), zero-based `index`,
+`is_variable` and, in full mode, editable `properties`. Panel slots contain
+`class` and full-mode `properties`. `bindings` describes property bindings;
+`animations` lists names, start/end times and lengths in seconds. Event nodes
+include component-bound events with `widget` and `delegate`. Graph mode omits
+the tree; summary omits widget/slot defaults and all node/pin lists.
+
+```json
+{"op":"add_widget","id":"entry4","class":"/Script/UMG.Overlay","name":"Overlay_Chainshot","parent":"AmmoEntries","index":4,"slot":{"Padding":"(Left=4,Top=0,Right=4,Bottom=0)"},"is_variable":true}
+{"op":"add_widget","id":"button","class":"/Script/UMG.Button","name":"Btn_EnemyShip","parent":"entry4"}
+{"op":"set_widget_property","widget":"button","property":"Visibility","value":"Visible"}
+{"op":"set_widget_property","widget":"Label","property":"Text","value":"Chainshot"}
+{"op":"set_slot_property","widget":"entry4","property":"Padding","value":"(Left=8,Top=0,Right=8,Bottom=0)"}
+{"op":"move_widget","widget":"entry4","parent":"AmmoEntries","index":5,"slot":{"HorizontalAlignment":"HAlign_Fill"}}
+{"op":"rename_widget","widget":"Label","name":"Label_Chainshot"}
+{"op":"remove_widget","widget":"UnusedEntry"}
+{"op":"bind_widget_event","widget":"button","event":"OnClicked","id":"clicked","graph":"EventGraph","x":0,"y":200}
+{"op":"connect","from":{"node":"clicked","pin":"then"},"to":{"node":"callQuickComm","pin":"execute"}}
+{"op":"reparent","parent_class":"/Script/UMG.UserWidget"}
+```
+
+- Widget selectors accept names or `add_widget` aliases from the same batch.
+  Responses contain `widget_ids` mapping aliases to final names and `node_ids`
+  for graph aliases, including bound event nodes.
+- Omit `parent` (or use empty string) to create the root of an empty tree.
+  Panel parents include CanvasPanel, Overlay, HorizontalBox, VerticalBox, GridPanel,
+  ScrollBox, SizeBox and Border. Single-child panels must have room. Children can
+  be native widgets or generated UserWidget classes. Recursive nesting is invalid.
+- Index is zero-based; omission appends. Move uses the index in the resulting
+  list; moving the root or creating a cycle is rejected. Moving between parents
+  preserves editable slot values only if the slot classes match. Supply `slot`
+  overrides for a different panel type. Slot values must be text strings.
+- `set_widget_property`/`set_slot_property` validate editable reflected fields
+  and Unreal text before assignment; dot paths traverse structs (e.g. `Font.Size`).
+  Tree ownership fields and `bIsVariable` cannot be changed through property ops.
+  Copy the desired editable slot values from full inspection to match an existing
+  entry's layout. Add entries 4 then 5 in that order to keep their final indices.
+- Remove deletes the local subtree. Rename/removal fails clearly when graph
+  references, bound events, property bindings, animations, desired focus, explicit
+  navigation or inherited members prevent a safe change. Remove those references
+  first. The conservative property-path/navigation checks may reject unrelated
+  bindings; this version does not rewrite binding/animation/navigation assets.
+  Inherited widget trees and named-slot tree editing are not supported.
+- `bind_widget_event` requires `is_variable:true` and a BlueprintAssignable
+  multicast delegate. It finds the existing event or creates a component-bound
+  event, returning its GUID under `id`; wire it using v1 `connect` and `add_node`
+  call operations. An existing binding in a different graph is an error.
+- V1 event-graph ops support Construct/Destruct/Tick overrides. Struct pin text,
+  including `(TagName="PP.GamePhase.PostRound")`, is passed through the K2 schema
+  validation used by `set_pin_default`. Tags must be registered in the project.
+- Reparent accepts UUserWidget native/generated subclasses and rejects other
+  families. Structural widget edits regenerate the skeleton and compile the full
+  widget class before saving, preserving tree changes in the generated class.
+
+```json
+{"action":"create","asset":"/Game/__UAssetAgentTests/W_Test","kind":"widget","parent_class":"/Script/UMG.UserWidget","operations":[{"op":"add_widget","id":"root","name":"Root","class":"/Script/UMG.Overlay"}],"dry_run":true,"response_mode":"summary"}
+```
+
+## Asset maintenance (protocol 2)
+
+These are independent actions, not `apply` operations. They default to
+`dry_run:true` and require an explicit `dry_run:false` for disk changes.
+
+```json
+{"action":"delete_asset","asset":"/Game/Unused/BP_Test","dry_run":true,"force":false}
+{"action":"delete_asset","asset":"/Game/Unused/BP_Test","expected_revision":"<40-character SHA-1>","dry_run":false,"force":false}
+{"action":"fixup_redirectors","path":"/Game/Polynesien","dry_run":true}
+{"action":"fixup_redirectors","path":"/Game/Polynesien","expected_revisions":{"/Game/Polynesien/OldName":"<SHA-1>","/Game/Polynesien/ReferencingBP":"<SHA-1>"},"dry_run":false}
+```
+
+Deletion returns `revision` and registry `referencers`; reference conflicts fail
+with that information intact. `force:false` rejects referencers; `force:true`
+explicitly permits leaving broken references and does not rewrite other assets.
+An optional `expected_revision` checks stale requests. The real delete backs up
+the package and returns `deleted:true`, `saved:true` and `backups`. Blueprint
+deletion does not compile the deleted asset (nothing is saved), allowing cleanup
+of broken assets. Registry checks cannot find names embedded in arbitrary text,
+code/configuration or unregistered external files.
+
+Fixup scans redirectors recursively, resolves chains and discovers referencers
+across all registered content. It loads referencing packages (resolving hard
+references), rewrites serialized soft paths, and compiles every affected Blueprint
+before saving any package. Dry runs return `redirectors`, `packages_to_save` and
+`revisions`; send the entire revision map back as `expected_revisions` to reject
+stale or changed plans. The real run backs up **all** affected packages first,
+saves referencers, rescans dependencies and deletes redirectors only when no
+external referencers remain. Returns `saved_assets`, `deleted_redirectors`,
+`backups`, `saved` and `save_attempted` as work proceeds.
+
+Both actions require writable, single-asset `.uasset` packages under `/Game`;
+maps, split packages and referencers outside `/Game` are rejected. Fixup fails
+before saving for missing/cyclic/unknown targets or referencer compile errors.
+If an outside-folder redirector refers to a selected redirector, select a common
+ancestor folder. Fixup does not rewrite source code/configuration, collection
+files, or arbitrary strings. A filesystem error or unresolved dependency detected
+after saves can leave a **partial multi-package result**; use `saved_assets` and
+`backups` to inspect/recover. No automatic rollback is promised for disk failures.

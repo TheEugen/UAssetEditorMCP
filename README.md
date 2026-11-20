@@ -5,19 +5,22 @@ JSON operations; Unreal edits the Blueprint graphs, compiles them and saves real
 `.uasset` files. No binary format guessing or clipboard/UI automation is involved.
 
 Implemented: inspect/list Blueprints, compact summaries and single-graph responses,
-batch compile checks without saving, discover reflected functions, create normal
-class Blueprints, re-parent them, inspect/edit component-template defaults,
+batch compile checks without saving, discover reflected functions, create normal,
+Animation and Widget Blueprints, re-parent them, inspect/edit component-template defaults,
 add/delete typed member variables, edit custom-event parameters and RPC flags,
 list redirectors and broken destination chains, add functions, add/call events and functions,
 connect/disconnect pins, set defaults, delete/move nodes, add replicated variables,
-RepNotify functions and server/client/multicast RPCs. See [the protocol](docs/protocol.md)
+RepNotify functions and server/client/multicast RPCs. Protocol 2 also edits anim
+node properties/function bindings, retargets AnimBP variables to inherited members,
+edits widget trees/slots/delegate events, deletes assets with referencer checks,
+and fixes redirectors in folders. See [the protocol](docs/protocol.md)
 for the precise supported subset.
 
 **Status:** v1 was built and exercised end to end in Lyra in the reported
 13 November session: list, inspect, function lookup, dry-run compilation,
-create/save, apply/save/backup and stale-revision rejection. The v0.3 source
-passes 16 Python tests and a C++ syntax/API check against installed UE 5.4 headers,
-including four native automation test cases.
+create/save, apply/save/backup and stale-revision rejection. The v2 source includes
+Python client tests, seven native automation cases, and commandlet persistence
+tests. The optional C++ API checker can verify engine imports as well as syntax.
 The full build is currently blocked in this workspace by denied writes to
 UnrealBuildTool's external `MarketplaceRules.dll` cache, so its expanded runtime
 integration checks have not run. Rebuild the plugin before using the new requests.
@@ -60,6 +63,22 @@ Run builds from a shell permitted to write Unreal's normal build caches. The
 plugin is editor-only and is not included in your multiplayer game's runtime.
 The build script stages only plugin source, so Unreal cannot recursively copy
 the package output into its own build. It refuses to overwrite an earlier package.
+
+For the existing Lyra installation in `Plugins/UAssetEditor`, update that folder
+directly (the generic installer above uses a different folder name):
+
+```powershell
+Copy-Item -LiteralPath 'F:\PP-GPT\UassetEditor\Source' `
+  -Destination 'F:\Unreal-Merge\Unreal\Lyra\Plugins\UAssetEditor' -Recurse -Force
+Copy-Item -LiteralPath 'F:\PP-GPT\UassetEditor\UAssetAgent.uplugin' `
+  -Destination 'F:\Unreal-Merge\Unreal\Lyra\Plugins\UAssetEditor\UAssetAgent.uplugin' -Force
+& 'F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Build\BatchFiles\Build.bat' `
+  LyraEditor Win64 Development '-Project=F:\Unreal-Merge\Unreal\Lyra\Lyra.uproject' `
+  -WaitMutex -NoHotReloadFromIDE
+```
+
+Restart the MCP server after updating `uasset_agent.py`; keep it pointed at this
+repository so `blueprint_protocol` serves the updated protocol text.
 
 ## Use from a coding agent or terminal
 
@@ -118,7 +137,8 @@ alongside the plugin; the Python server reads its bundled protocol document.
 
 The server exposes `blueprint_protocol`, `blueprint_list`, `blueprint_compile`,
 `blueprint_inspect`, `blueprint_components`, `blueprint_redirectors`,
-`blueprint_functions`, `blueprint_create`, and `blueprint_apply`. It uses stdio;
+`blueprint_functions`, `blueprint_create`, `blueprint_apply`, `blueprint_delete_asset`,
+and `blueprint_fixup_redirectors`. It uses stdio;
 it does not open a network listener. Set the agent's tool timeout high enough
 for Unreal startup and compilation. Requests are processed sequentially, so
 in-flight tool cancellation is not currently implemented.
@@ -136,7 +156,7 @@ parameter replacement behavior and reference/link checks.
 
 Suggested instruction for your coding agents:
 
-> Use UAsset Agent to edit normal class Blueprints. Read blueprint_protocol first.
+> Use UAsset Agent to edit normal, Animation and Widget Blueprints. Read blueprint_protocol first.
 > Inspect the asset and use its revision. Construct one batch, dry-run it, inspect
 > compiler diagnostics, then apply it. Use node aliases inside the batch and GUIDs
 > for existing nodes. Never hex-edit .uasset files. Report gameplay behavior that
@@ -147,11 +167,15 @@ Suggested instruction for your coding agents:
 ```powershell
 py -3.9 -m unittest discover -s tests -p "test_*.py" -v
 py -3.9 tests/check_cpp_headers.py --engine "F:\UnrealMarketplace\UE_5.4"
+py -3.9 tests/check_cpp_headers.py --engine "F:\UnrealMarketplace\UE_5.4" --link
 ```
 
 The header check uses the installed MSVC and engine headers to check the native
 implementation. It substitutes the commandlet's reflected class declaration;
-it **does not** validate UHT generation, linking, or runtime behavior. Override
+it **does not** validate UHT generation or runtime behavior. `--link` compiles the
+substitute translation unit and resolves imports using UE's import libraries,
+catching non-exported API calls. Its DLL is only a validation artifact, **not** an
+installable plugin or substitute for a UBT build. Override
 `--msvc`/`--sdk` if your toolchain is installed elsewhere.
 
 After building/installing the plugin in the disposable `tests/Host` project:
@@ -167,7 +191,7 @@ saved graph connections, replication flags, defaults, compact responses, batch
 compile failure handling, backups, revision conflicts, dry runs, and persisted
 re-parenting, variable deletion, event changes and native component defaults.
 
-The plugin also includes four native automation tests under `UAssetAgent` for
+The plugin also includes native automation tests under `UAssetAgent` for
 re-parenting/cycles, local/inherited/native component defaults, parameter-link
 preservation and variable deletion, and valid/broken/cyclic redirector chains.
 After installing the rebuilt plugin, run them in the disposable host project:
@@ -179,7 +203,27 @@ After installing the rebuilt plugin, run them in the disposable host project:
   "-abslog=$PWD\tests\Host\Saved\UAssetAgentAutomation.log"
 ```
 
-These tests retain uniquely named fixtures under `/Game/UAssetAgentTests`.
+The v1 tests retain uniquely named fixtures under `/Game/UAssetAgentTests`.
+The three `UAssetAgent.V2` cases create temporary animation/widget fixtures under
+`/Game/__UAssetAgentTests`, exercise every new op, and delete their fixtures.
+Run only v2 with `Automation RunTests UAssetAgent.V2` in the command above.
+
+Run the new commandlet persistence suite after rebuilding the host plugin:
+
+```powershell
+py -3.9 tests/integration_v2.py --project tests/Host/UAssetAgentHost.uproject `
+  --engine "F:\UnrealMarketplace\UE_5.4"
+```
+
+It runs dry runs and real saves, reloads in fresh processes, checks compact
+responses, retargeting, inherited defaults, widget indices/slots/delegate wiring,
+GameplayTag literal replacement, revision conflicts and backups, then deletes
+its own temporary fixtures. The host includes the four fixture GameplayTags in
+`tests/Host/Config/DefaultGameplayTags.ini`; register these tags if using another
+disposable project for this suite.
+The specific Lyra ABP_Wheel/sail/pump/capstan/cannon and HUD migrations still need
+acceptance runs on project copies after the Lyra plugin is rebuilt; these generic
+fixtures do not prove gameplay behavior or the project-specific native bindings.
 
 Existing assets are backed up under `Saved/UAssetAgent/Backups` before saving.
 Validation/compile failures do not save the asset. Crashes, timeouts, and save
@@ -196,12 +240,15 @@ Component defaults support local SCS templates, inherited Blueprint overrides
 and native class default subobjects. Variable deletion rejects known references;
 event parameter edits preserve unchanged wiring and update local callers.
 
-Variable renaming, component creation/removal, animation and widget Blueprint
-editing remain outside this version. The compile action can check standalone
-Blueprint subclasses without adding support for editing them.
+Variable renaming, actor component creation/removal, creating state machines or
+anim layers, editing Control Rig/IK Rig assets and authoring widget animations
+remain outside this version. Referenced widget rename/removal fails clearly;
+binding/animation/navigation reference rewriting is intentionally limited.
 
 The reported Lyra test asset `/Game/Polynesien/Debug/BP_AgentSmokeTest` remains
-a cleanup item in that project. This update adds no asset-delete operation.
+a cleanup item in that project; `delete_asset` can now check references, back up
+and remove it. Maintenance actions default to dry runs. Multi-package redirector
+fixup can leave partial disk results on save failures; consult its backups/logs.
 
 ## Design references
 

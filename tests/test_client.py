@@ -127,11 +127,13 @@ class McpTests(unittest.TestCase):
     def test_handshake_and_discovery(self):
         self.assertEqual(self.rpc("initialize", {"protocolVersion": "2024-11-05"})["result"]["protocolVersion"], "2024-11-05")
         names = {d["name"] for d in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(len(names), 9)
+        self.assertEqual(len(names), 11)
         self.assertIn("blueprint_apply", names)
         self.assertIn("blueprint_compile", names)
         self.assertIn("blueprint_components", names)
         self.assertIn("blueprint_redirectors", names)
+        self.assertIn("blueprint_delete_asset", names)
+        self.assertIn("blueprint_fixup_redirectors", names)
 
     def test_component_and_redirector_tools_and_cli(self):
         requests = []

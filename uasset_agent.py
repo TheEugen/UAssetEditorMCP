@@ -14,7 +14,7 @@ import sys
 import time
 import uuid
 
-VERSION = "0.3.0"
+VERSION = "2.0.0"
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 ROOT = Path(__file__).resolve().parent
 
@@ -33,9 +33,9 @@ def validate_request(request):
     if not isinstance(request, dict):
         raise AgentError("Request must be a JSON object")
     action = request.get("action")
-    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors"}:
-        raise AgentError("action must be list, inspect, functions, apply, create, compile, components or redirectors")
-    if action in {"list", "compile", "redirectors"}:
+    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors"}:
+        raise AgentError("Unknown action; read blueprint_protocol for supported actions")
+    if action in {"list", "compile", "redirectors", "fixup_redirectors"}:
         path = request.get("path", "/Game")
         if (not isinstance(path, str) or not (path == "/Game" or path.startswith("/Game/")) or
                 any(c in path for c in (".", "\\", ":")) or
@@ -52,7 +52,7 @@ def validate_request(request):
                 raise AgentError("response_mode graph requires a nonempty graph name or object path")
         elif "graph" in request:
             raise AgentError("graph requires response_mode graph")
-    if action in {"inspect", "components", "apply", "create"}:
+    if action in {"inspect", "components", "apply", "create", "delete_asset"}:
         asset = request.get("asset", "")
         if (not isinstance(asset, str) or not asset.startswith("/Game/") or
                 any(c in asset for c in (".", "\\", ":")) or
@@ -66,8 +66,21 @@ def validate_request(request):
             raise AgentError("operations must be an array of at most 1000 operations")
         if any(not isinstance(op, dict) or not isinstance(op.get("op"), str) for op in ops):
             raise AgentError("Every operation must be an object with an op string")
-        if "dry_run" in request and not isinstance(request["dry_run"], bool):
-            raise AgentError("dry_run must be a boolean")
+    for field in ("dry_run", "force", "template"):
+        if field in request and not isinstance(request[field], bool):
+            raise AgentError(field + " must be a boolean")
+    if action == "create":
+        kind = request.get("kind", "normal")
+        if not isinstance(kind, str) or kind not in {"normal", "animation", "widget"}:
+            raise AgentError("kind must be normal, animation or widget")
+        if kind == "animation" and not request.get("template", False) and not isinstance(request.get("skeleton"), str):
+            raise AgentError("Animation creation requires skeleton or template:true")
+    if "expected_revisions" in request:
+        revisions = request["expected_revisions"]
+        if action != "fixup_redirectors" or not isinstance(revisions, dict):
+            raise AgentError("expected_revisions must be a fixup_redirectors revision map")
+        for asset, revision in revisions.items():
+            validate_request({"action": "inspect", "asset": asset, "expected_revision": revision})
     if "expected_revision" in request:
         revision = request["expected_revision"]
         if not isinstance(revision, str) or len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
@@ -277,18 +290,26 @@ def tool_definitions():
         ("blueprint_list", "List Blueprint assets under /Game.", {"path": {"type": "string"}}, []),
         ("blueprint_redirectors", "List on-disk redirectors recursively, including missing destinations. Reports destination, chain and resolved/missing/cycle/unknown status from asset registry metadata; does not fix or delete assets.",
          {"path": {"type": "string", "default": "/Game"}}, []),
+        ("blueprint_delete_asset", "Delete a single /Game asset with backup and registry referencer check. Defaults to dry run and force:false. force:true can leave broken references; read blueprint_protocol. Use revision from inspection or the deletion dry run.",
+         {"asset": asset, "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "dry_run": {"type": "boolean", "default": True}, "force": {"type": "boolean", "default": False}}, ["asset"]),
+        ("blueprint_fixup_redirectors", "Fix redirectors recursively in a /Game folder. Defaults to dry run; returns revisions for expected_revisions on save. Backs up affected packages and compiles referencing Blueprints before saving. Broken destinations abort. Multi-package disk failures can leave partial results; read blueprint_protocol.",
+         {"path": {"type": "string", "default": "/Game"}, "dry_run": {"type": "boolean", "default": True},
+          "expected_revisions": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}}, []),
         ("blueprint_components", "Inspect local, inherited Blueprint and native component template defaults without graph output. Returns component selectors and file revision for set_component_default operations.",
          {"asset": asset}, ["asset"]),
         ("blueprint_compile", "Compile one Blueprint or recursively compile a folder in one Unreal process, without saving. Returns counts and only failures with diagnostics. Includes Blueprint subclasses. Editor must be closed; allow a long timeout for /Game.",
          {"path": {"type": "string", "default": "/Game", "description": "Blueprint package or recursive folder path under /Game; defaults to the entire /Game tree."}}, []),
-        ("blueprint_inspect", "Read graphs, node GUIDs, pin names, defaults, replication and the file revision before editing.", {"asset": asset}, ["asset"]),
+        ("blueprint_inspect", "Inspect normal, Animation or Widget Blueprints: graphs, pose links, anim function bindings/properties, widget tree/slots/bindings/animations, defaults and revision. summary omits nodes and pins; graph selects one graph.", {"asset": asset}, ["asset"]),
         ("blueprint_functions", "Discover callable functions and parameter types on a class, e.g. /Script/Engine.KismetSystemLibrary.",
          {"class": {"type": "string"}, "search": {"type": "string"}}, ["class"]),
-        ("blueprint_apply", "Apply operations to one Blueprint, compile and save. Read blueprint_protocol first. Use expected_revision from inspect; dry_run compiles without saving. Editor must be closed.",
+        ("blueprint_apply", "Edit normal, Animation or Widget Blueprints, compile and save. Includes reparent, inherited variable retargeting, anim properties/function bindings, widget tree/slot edits and delegate events. Read blueprint_protocol for operation shapes and limits. Use expected_revision; dry_run compiles without saving. Editor must be closed.",
          {"asset": asset, "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
           "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "dry_run": {"type": "boolean"}}, ["asset", "operations", "expected_revision"]),
-        ("blueprint_create", "Create a normal class Blueprint with optional operations, compile and save. Read blueprint_protocol first. Never overwrites an existing asset.",
+        ("blueprint_create", "Create a normal, animation or widget Blueprint with operations, compile and save. Animation requires skeleton or template:true and an AnimInstance parent; widget requires a UserWidget parent. Never overwrites assets.",
          {"asset": asset, "parent_class": {"type": "string"}, "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
+          "kind": {"type": "string", "enum": ["normal", "animation", "widget"], "default": "normal"},
+          "skeleton": {"type": "string"}, "template": {"type": "boolean", "default": False},
           "dry_run": {"type": "boolean"}}, ["asset", "operations"]),
         ("blueprint_protocol", "Read the complete operation format, node types, pin references and examples before constructing an edit batch.", {}, [])]
     for name, description, properties, required in specs:
@@ -411,8 +432,8 @@ def main(argv=None):
                     raise AgentError("Request exceeds 4 MiB")
                 request = read_json(text)
                 if args.dry_run:
-                    if not isinstance(request, dict) or request.get("action") not in {"apply", "create"}:
-                        raise AgentError("--dry-run requires an apply or create request")
+                    if not isinstance(request, dict) or request.get("action") not in {"apply", "create", "delete_asset", "fixup_redirectors"}:
+                        raise AgentError("--dry-run requires an edit or maintenance request")
                     request["dry_run"] = True
             elif args.command == "functions":
                 request = {"action": "functions", "class": args.class_path, "search": args.search}

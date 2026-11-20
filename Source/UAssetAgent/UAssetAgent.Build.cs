@@ -8,7 +8,8 @@ public class UAssetAgent : ModuleRules
         bEnableExceptions = true;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine" });
         PrivateDependencyModuleNames.AddRange(new[] {
-            "UnrealEd", "BlueprintGraph", "KismetCompiler", "Json", "AssetRegistry"
+            "UnrealEd", "BlueprintGraph", "Kismet", "KismetCompiler", "Json", "AssetRegistry",
+            "AnimGraph", "AnimGraphRuntime", "UMG", "UMGEditor", "SlateCore", "MovieScene", "AssetTools"
         });
     }
 }

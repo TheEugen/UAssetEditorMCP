@@ -37,6 +37,24 @@
 #include "UObject/GarbageCollection.h"
 #include "UObject/UnrealType.h"
 #include "UObject/ObjectRedirector.h"
+#include "Animation/AnimBlueprint.h"
+#include "Animation/AnimBlueprintGeneratedClass.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/Skeleton.h"
+#include "AnimGraphNode_Base.h"
+#include "WidgetBlueprint.h"
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Blueprint/WidgetBlueprintGeneratedClass.h"
+#include "Components/PanelWidget.h"
+#include "Components/PanelSlot.h"
+#include "Blueprint/WidgetNavigation.h"
+#include "Animation/WidgetAnimation.h"
+#include "K2Node_ComponentBoundEvent.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "ObjectTools.h"
+#include "UObject/Package.h"
 
 namespace UAssetAgent
 {
@@ -323,6 +341,8 @@ static FJson DescribeType(const FEdGraphPinType& Type)
     return J;
 }
 
+#include "UAssetAgentV2Inspect.inl"
+
 static FJson DescribeNode(UEdGraphNode* Node)
 {
     FJson J = MakeShared<FJsonObject>();
@@ -332,6 +352,12 @@ static FJson DescribeNode(UEdGraphNode* Node)
     J->SetNumberField(TEXT("x"), Node->NodePosX);
     J->SetNumberField(TEXT("y"), Node->NodePosY);
     J->SetStringField(TEXT("comment"), Node->NodeComment);
+    if (UAnimGraphNode_Base* Anim = Cast<UAnimGraphNode_Base>(Node)) { DescribeAnimNode(Anim, J); }
+    if (UK2Node_ComponentBoundEvent* Bound = Cast<UK2Node_ComponentBoundEvent>(Node))
+    {
+        J->SetStringField(TEXT("widget"), Bound->ComponentPropertyName.ToString());
+        J->SetStringField(TEXT("delegate"), Bound->DelegatePropertyName.ToString());
+    }
     if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
     {
         J->SetStringField(TEXT("function"), Call->FunctionReference.GetMemberName().ToString());
@@ -377,6 +403,14 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
     FJson J = MakeShared<FJsonObject>();
     J->SetStringField(TEXT("asset"), BP->GetOutermost()->GetName());
     J->SetStringField(TEXT("parent_class"), BP->ParentClass ? BP->ParentClass->GetPathName() : FString());
+    J->SetStringField(TEXT("kind"), BlueprintKind(BP));
+    if (UAnimBlueprint* Anim = Cast<UAnimBlueprint>(BP))
+    {
+        J->SetStringField(TEXT("skeleton"), Anim->TargetSkeleton ? Anim->TargetSkeleton->GetPathName() : FString());
+        J->SetBoolField(TEXT("template"), Anim->bIsTemplate);
+    }
+    if (UWidgetBlueprint* Widget = Cast<UWidgetBlueprint>(BP))
+    { if (Mode != TEXT("graph")) { DescribeWidgetBlueprint(Widget, J, Mode == TEXT("full")); } }
     if (Mode != TEXT("graph"))
     {
         TArray<TSharedPtr<FJsonValue>> Variables;
@@ -401,6 +435,8 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
         FJson G = MakeShared<FJsonObject>();
         G->SetStringField(TEXT("name"), Graph->GetName());
         G->SetStringField(TEXT("path"), Graph->GetPathName());
+        G->SetStringField(TEXT("class"), Graph->GetClass()->GetPathName());
+        G->SetStringField(TEXT("schema"), Graph->GetSchema() ? Graph->GetSchema()->GetClass()->GetPathName() : FString());
         TArray<TSharedPtr<FJsonValue>> Nodes;
         TArray<TSharedPtr<FJsonValue>> Events;
         int32 NodeCount = 0;
@@ -476,6 +512,13 @@ public:
     UBlueprint* BP;
     FJson Response;
     TMap<FString, FGuid> Aliases;
+    TMap<FString, FName> WidgetAliases;
+    TSet<FName> PlannedRetargets;
+    TSet<FName> CompletedRetargets;
+    TSet<FName> PlannedFunctionDeletes;
+    TSet<FName> CompletedFunctionDeletes;
+    TArray<FJson> DeferredDefaults;
+    bool bRefreshAfterBatch = false;
     EBlueprintCompileOptions CompileOptions = EBlueprintCompileOptions::None;
     explicit FEditor(UBlueprint* InBP, const FJson& InResponse) : BP(InBP), Response(InResponse) {}
 
@@ -641,9 +684,12 @@ public:
         }
     }
 
+    #include "UAssetAgentV2Edit.inl"
+
     void Apply(const FJson& Op)
     {
         FString Kind = String(Op, TEXT("op"));
+        if (ApplyV2(Op)) { return; }
         if (Kind == TEXT("reparent"))
         {
             UClass* Parent = LoadObject<UClass>(nullptr, *String(Op, TEXT("parent_class")));
@@ -651,15 +697,36 @@ public:
                 !Parent->HasAnyClassFlags(CLASS_Deprecated | CLASS_NewerVersionExists | CLASS_Interface), TEXT("Invalid Blueprint parent class"));
             Require(Parent->ClassGeneratedBy != BP && (!BP->GeneratedClass || !Parent->IsChildOf(BP->GeneratedClass)) &&
                 (!BP->SkeletonGeneratedClass || !Parent->IsChildOf(BP->SkeletonGeneratedClass)), TEXT("Re-parenting would create an inheritance cycle"));
+            Require((!BP->IsA<UAnimBlueprint>() || Parent->IsChildOf(UAnimInstance::StaticClass())) &&
+                (!BP->IsA<UWidgetBlueprint>() || Parent->IsChildOf(UUserWidget::StaticClass())), TEXT("Parent must match the animation/widget Blueprint kind"));
             Require(BP->ParentClass &&
                 BP->ParentClass->IsChildOf(AActor::StaticClass()) == Parent->IsChildOf(AActor::StaticClass()) &&
                 BP->ParentClass->IsChildOf(UActorComponent::StaticClass()) == Parent->IsChildOf(UActorComponent::StaticClass()),
                 TEXT("Re-parenting must preserve the Actor, ActorComponent or UObject family"));
             if (Parent == BP->ParentClass) { return; }
-            for (const FBPVariableDescription& Variable : BP->NewVariables)
+            const TArray<FBPVariableDescription> LocalVariables = BP->NewVariables;
+            for (const FBPVariableDescription& Variable : LocalVariables)
             {
+                if (BP->IsA<UAnimBlueprint>() && FindFProperty<FProperty>(Parent, Variable.VarName) && PlannedRetargets.Contains(Variable.VarName))
+                { RetargetVariable(Variable.VarName, Parent); CompletedRetargets.Add(Variable.VarName); continue; }
                 Require(!FindFProperty<FProperty>(Parent, Variable.VarName) && !Parent->FindFunctionByName(Variable.VarName),
                     TEXT("New parent has a member conflicting with local variable: ") + Variable.VarName.ToString());
+            }
+            if (BlueprintKind(BP) != TEXT("normal"))
+            {
+                const TArray<TObjectPtr<UEdGraph>> Functions = BP->FunctionGraphs;
+                for (UEdGraph* Function : Functions)
+                {
+                    const FName Name = Function->GetFName();
+                    if (PlannedFunctionDeletes.Contains(Name) && Parent->FindFunctionByName(Name))
+                    {
+                        FJson Delete = MakeShared<FJsonObject>();
+                        Delete->SetStringField(TEXT("op"), TEXT("delete_function"));
+                        Delete->SetStringField(TEXT("name"), Name.ToString());
+                        ApplyV2(Delete);
+                        CompletedFunctionDeletes.Add(Name);
+                    }
+                }
             }
             BP->Modify();
             BP->ParentClass = Parent;
@@ -671,13 +738,22 @@ public:
                 BP->SimpleConstructionScript->ValidateSceneRootNodes();
             }
             CompileOptions |= EBlueprintCompileOptions::UseDeltaSerializationDuringReinstancing | EBlueprintCompileOptions::SkipNewVariableDefaultsDetection;
-            FBlueprintEditorUtils::RefreshAllNodes(BP);
+            if (BlueprintKind(BP) == TEXT("normal")) { FBlueprintEditorUtils::RefreshAllNodes(BP); }
+            else { bRefreshAfterBatch = true; }
             FBlueprintEditorUtils::MarkBlueprintAsModified(BP);
             return;
         }
         if (Kind == TEXT("delete_variable"))
         {
             const FName Name(*String(Op, TEXT("name")));
+            if (Boolean(Op, TEXT("retarget_references")))
+            {
+                Require(BP->IsA<UAnimBlueprint>(), TEXT("retarget_references is supported only for animation Blueprints"));
+                if (CompletedRetargets.Remove(Name)) { return; }
+                RetargetVariable(Name, BP->ParentClass);
+                FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+                return;
+            }
             Require(FBlueprintEditorUtils::FindNewVariableIndex(BP, Name) != INDEX_NONE, TEXT("Local member variable not found (inherited variables cannot be deleted)"));
             FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().SearchAllAssets(true);
             Require(!FBlueprintEditorUtils::IsVariableUsed(BP, Name), TEXT("Variable is referenced; remove its uses before deleting: ") + Name.ToString());
@@ -728,6 +804,14 @@ public:
             FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
             if (Op->HasField(TEXT("default")))
             {
+                if (BlueprintKind(BP) != TEXT("normal"))
+                {
+                    FJson Default = MakeShared<FJsonObject>();
+                    Default->SetStringField(TEXT("property"), Name);
+                    Default->SetStringField(TEXT("value"), String(Op, TEXT("default"), FString(), false));
+                    DeferredDefaults.Add(Default);
+                    return;
+                }
                 Require(CompileCurrent(), TEXT("Compile failed after adding variable"));
                 SetDefault(Name, String(Op, TEXT("default"), FString(), false));
             }
@@ -735,6 +819,7 @@ public:
         }
         if (Kind == TEXT("set_default"))
         {
+            if (BlueprintKind(BP) != TEXT("normal")) { DeferredDefaults.Add(Op); return; }
             Require(CompileCurrent(), TEXT("Compile failed before setting default"));
             SetDefault(String(Op, TEXT("property")), ValueString(Op, TEXT("value")));
             return;
@@ -973,11 +1058,15 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
     return Result;
 }
 
+#include "UAssetAgentMaintenance.inl"
+
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 1);
+    Response->SetNumberField(TEXT("protocol_version"), 2);
     Response->SetBoolField(TEXT("saved"), false);
+    if (Action == TEXT("delete_asset") || Action == TEXT("fixup_redirectors"))
+    { Maintenance(Request, Response); return; }
     if (Request->HasField(TEXT("response_mode")) || Request->HasField(TEXT("graph")))
     {
         Require(Action == TEXT("inspect") || Action == TEXT("apply") || Action == TEXT("create"), TEXT("response_mode and graph require inspect, apply or create"));
@@ -1102,7 +1191,35 @@ static void Execute(const FJson& Request, const FJson& Response)
         Require(!FPackageName::DoesPackageExist(Package), TEXT("Asset already exists"));
         UClass* Parent = LoadObject<UClass>(nullptr, *String(Request, TEXT("parent_class"), TEXT("/Script/Engine.Actor"), false));
         Require(Parent && FKismetEditorUtilities::CanCreateBlueprintOfClass(Parent), TEXT("Invalid Blueprint parent class"));
-        BP = FKismetEditorUtilities::CreateBlueprint(Parent, CreatePackage(*Package), FName(*FPackageName::GetLongPackageAssetName(Package)), BPTYPE_Normal, UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+        const FString Kind = String(Request, TEXT("kind"), TEXT("normal"), false);
+        Require(Kind == TEXT("normal") || Kind == TEXT("animation") || Kind == TEXT("widget"), TEXT("kind must be normal, animation or widget"));
+        Require((Kind != TEXT("animation") || Parent->IsChildOf(UAnimInstance::StaticClass())) &&
+            (Kind != TEXT("widget") || Parent->IsChildOf(UUserWidget::StaticClass())), TEXT("Parent class must match Blueprint kind"));
+        UClass* AssetClass = UBlueprint::StaticClass();
+        UClass* GeneratedClass = UBlueprintGeneratedClass::StaticClass();
+        if (Kind == TEXT("animation"))
+        {
+            FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("AnimGraph"));
+            AssetClass = UAnimBlueprint::StaticClass(); GeneratedClass = UAnimBlueprintGeneratedClass::StaticClass();
+        }
+        if (Kind == TEXT("widget"))
+        {
+            FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("UMGEditor"));
+            AssetClass = UWidgetBlueprint::StaticClass(); GeneratedClass = UWidgetBlueprintGeneratedClass::StaticClass();
+        }
+        BP = FKismetEditorUtilities::CreateBlueprint(Parent, CreatePackage(*Package), FName(*FPackageName::GetLongPackageAssetName(Package)), BPTYPE_Normal, AssetClass, GeneratedClass);
+        if (UAnimBlueprint* Anim = Cast<UAnimBlueprint>(BP))
+        {
+            Anim->bIsTemplate = Boolean(Request, TEXT("template"));
+            if (Request->HasField(TEXT("skeleton")))
+            {
+                Anim->TargetSkeleton = LoadObject<USkeleton>(nullptr, *String(Request, TEXT("skeleton")));
+                Require(Anim->TargetSkeleton != nullptr, TEXT("Skeleton could not be loaded"));
+            }
+            Require(Anim->bIsTemplate || Anim->TargetSkeleton, TEXT("Animation creation requires a skeleton or template:true"));
+        }
+        if (UWidgetBlueprint* Widget = Cast<UWidgetBlueprint>(BP))
+        { if (!Widget->WidgetTree) { Widget->WidgetTree = NewObject<UWidgetTree>(Widget, TEXT("WidgetTree"), RF_Transactional); } }
     }
     else
     {
@@ -1114,8 +1231,9 @@ static void Execute(const FJson& Request, const FJson& Response)
     Require(BP != nullptr, TEXT("Blueprint could not be loaded/created"));
     Require(BP->GetOutermost()->GetName() == Package,
         TEXT("Asset path resolves to another package through a redirector; use the destination Blueprint package path"));
-    Require(BP->GetClass() == UBlueprint::StaticClass() && BP->BlueprintType == BPTYPE_Normal,
-        TEXT("Only normal class Blueprints are supported; animation, widget, level, interface and macro-library Blueprints are excluded"));
+    Require((BP->GetClass() == UBlueprint::StaticClass() || BP->GetClass() == UAnimBlueprint::StaticClass() ||
+        BP->GetClass() == UWidgetBlueprint::StaticClass()) && BP->BlueprintType == BPTYPE_Normal,
+        TEXT("Only normal class, animation and widget Blueprints are supported"));
     if (Action == TEXT("components"))
     {
         Response->SetArrayField(TEXT("components"), DescribeComponents(BP, true));
@@ -1128,20 +1246,39 @@ static void Execute(const FJson& Request, const FJson& Response)
         Response->SetStringField(TEXT("revision"), Before);
         return;
     }
-    Require(Compile(BP, Response), TEXT("Existing Blueprint does not compile; fix its errors before editing"));
+    // Specialized migration batches may start with duplicate inherited members.
+    // Compile the completed batch, allowing those conflicts to be repaired first.
+    if (BlueprintKind(BP) == TEXT("normal"))
+    { Require(Compile(BP, Response), TEXT("Existing Blueprint does not compile; fix its errors before editing")); }
     FEditor Editor(BP, Response);
     TArray<TSharedPtr<FJsonValue>> Operations = Array(Request, TEXT("operations"), true);
     Require(Operations.Num() <= 1000, TEXT("At most 1000 operations per batch"));
+    for (const auto& Value : Operations)
+    {
+        FJson Op = AsObject(Value);
+        if (String(Op, TEXT("op")) == TEXT("delete_variable") && Boolean(Op, TEXT("retarget_references")))
+        { Editor.PlannedRetargets.Add(FName(*String(Op, TEXT("name")))); }
+        if (String(Op, TEXT("op")) == TEXT("delete_function"))
+        { Editor.PlannedFunctionDeletes.Add(FName(*String(Op, TEXT("name")))); }
+    }
     for (int32 I = 0; I < Operations.Num(); ++I)
     {
         Response->SetNumberField(TEXT("operation_index"), I);
         Editor.Apply(AsObject(Operations[I]));
     }
     Response->RemoveField(TEXT("operation_index"));
+    if (Editor.bRefreshAfterBatch) { FBlueprintEditorUtils::RefreshAllNodes(BP); }
     Require(Editor.CompileCurrent(), TEXT("Blueprint compilation failed; no asset was saved"));
+    for (const FJson& Op : Editor.DeferredDefaults)
+    { Editor.SetDefault(String(Op, TEXT("property")), ValueString(Op, TEXT("value"))); }
+    if (!Editor.DeferredDefaults.IsEmpty())
+    { Require(Editor.CompileCurrent(), TEXT("Blueprint compilation failed after setting defaults; no asset was saved")); }
     FJson Aliases = MakeShared<FJsonObject>();
     for (const auto& Pair : Editor.Aliases) { Aliases->SetStringField(Pair.Key, Guid(Pair.Value)); }
     Response->SetObjectField(TEXT("node_ids"), Aliases);
+    FJson WidgetAliases = MakeShared<FJsonObject>();
+    for (const auto& Pair : Editor.WidgetAliases) { WidgetAliases->SetStringField(Pair.Key, Pair.Value.ToString()); }
+    Response->SetObjectField(TEXT("widget_ids"), WidgetAliases);
     Response->SetObjectField(TEXT("blueprint"), DescribeBlueprint(BP, Request));
     Response->SetStringField(TEXT("previous_revision"), Before);
     bool DryRun = Boolean(Request, TEXT("dry_run"));
@@ -1172,6 +1309,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "UAssetAgentTests.inl"
+#include "UAssetAgentV2Tests.inl"
 #endif
 
 UUAssetAgentCommandlet::UUAssetAgentCommandlet()
