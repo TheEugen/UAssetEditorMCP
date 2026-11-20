@@ -837,3 +837,7 @@ ancestor folder. Fixup does not rewrite source code/configuration, collection
 files, or arbitrary strings. A filesystem error or unresolved dependency detected
 after saves can leave a **partial multi-package result**; use `saved_assets` and
 `backups` to inspect/recover. No automatic rollback is promised for disk failures.
+
+### Repairing an existing Blueprint
+
+Set `repair: true` on `apply` to edit a Blueprint with compile errors. Inspect `initial_compile_ok` and `initial_diagnostics` for its starting state. A missing parent requires `reparent` as the first operation. The final compile, revision checks and backup requirements still apply.

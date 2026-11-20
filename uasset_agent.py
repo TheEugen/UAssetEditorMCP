@@ -33,6 +33,8 @@ def validate_request(request):
     if not isinstance(request, dict):
         raise AgentError("Request must be a JSON object")
     action = request.get("action")
+    if "repair" in request and (action != "apply" or not isinstance(request["repair"], bool)):
+        raise AgentError("repair must be a boolean on apply")
     if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path", "replace_references"}:
         raise AgentError("Unknown action; read blueprint_protocol for supported actions")
     if action in {"list", "compile", "redirectors", "fixup_redirectors"}:
@@ -395,6 +397,7 @@ def tool_definitions():
                 "minProperties": 1, "additionalProperties": False,
                 "description": "Return matching nodes only. Match exact node class, function, variable, or a referenced Unreal path. Multiple fields are ANDed."}
         if name == "blueprint_apply":
+            properties["repair"] = {"type": "boolean", "description": "Allow a broken starting Blueprint and return initial diagnostics. Saving requires a successful final compile."}
             properties["response_mode"] = {
                 "type": "string", "enum": ["full", "summary", "graph", "minimal"], "default": "full",
                 "description": "minimal returns diagnostics, aliases, revision and backup/save status without an asset snapshot."}

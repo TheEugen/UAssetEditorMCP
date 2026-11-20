@@ -951,9 +951,9 @@ public:
                 (!BP->SkeletonGeneratedClass || !Parent->IsChildOf(BP->SkeletonGeneratedClass)), TEXT("Re-parenting would create an inheritance cycle"));
             Require((!BP->IsA<UAnimBlueprint>() || Parent->IsChildOf(UAnimInstance::StaticClass())) &&
                 (!BP->IsA<UWidgetBlueprint>() || Parent->IsChildOf(UUserWidget::StaticClass())), TEXT("Parent must match the animation/widget Blueprint kind"));
-            Require(BP->ParentClass &&
+            Require(!BP->ParentClass || (
                 BP->ParentClass->IsChildOf(AActor::StaticClass()) == Parent->IsChildOf(AActor::StaticClass()) &&
-                BP->ParentClass->IsChildOf(UActorComponent::StaticClass()) == Parent->IsChildOf(UActorComponent::StaticClass()),
+                BP->ParentClass->IsChildOf(UActorComponent::StaticClass()) == Parent->IsChildOf(UActorComponent::StaticClass())),
                 TEXT("Re-parenting must preserve the Actor, ActorComponent or UObject family"));
             if (Parent == BP->ParentClass) { return; }
             const TArray<FBPVariableDescription> LocalVariables = BP->NewVariables;
@@ -1569,10 +1569,32 @@ static void Execute(const FJson& Request, const FJson& Response)
     }
     // Specialized migration batches may start with duplicate inherited members.
     // Compile the completed batch, allowing those conflicts to be repaired first.
-    if (BlueprintKind(BP) == TEXT("normal"))
-    { Require(Compile(BP, Response), TEXT("Existing Blueprint does not compile; fix its errors before editing")); }
+    const bool Repair = Action == TEXT("apply") && Boolean(Request, TEXT("repair"));
+    if (Repair)
+    {
+        Require(Request->HasField(TEXT("expected_revision")), TEXT("Repair requires expected_revision from inspection"));
+        FJson Initial = MakeShared<FJsonObject>();
+        if (BP->ParentClass)
+        {
+            Response->SetBoolField(TEXT("initial_compile_ok"), Compile(BP, Initial));
+        }
+        else
+        {
+            Response->SetBoolField(TEXT("initial_compile_ok"), false);
+            FJson Missing = MakeShared<FJsonObject>();
+            Missing->SetStringField(TEXT("severity"), TEXT("error"));
+            Missing->SetStringField(TEXT("message"), TEXT("Blueprint parent class is missing"));
+            Initial->SetArrayField(TEXT("diagnostics"), {JsonValue(Missing)});
+        }
+        Response->SetArrayField(TEXT("initial_diagnostics"), Array(Initial, TEXT("diagnostics")));
+    }
+    else if (BlueprintKind(BP) == TEXT("normal"))
+    { Require(BP->ParentClass && Compile(BP, Response), TEXT("Existing Blueprint does not compile; use repair:true to edit it")); }
     FEditor Editor(BP, Response);
     TArray<TSharedPtr<FJsonValue>> Operations = Array(Request, TEXT("operations"), true);
+    Require(BP->ParentClass || (Repair && !Operations.IsEmpty() &&
+        String(AsObject(Operations[0]), TEXT("op")) == TEXT("reparent")),
+        TEXT("Blueprint has no parent class; use repair:true with reparent as the first operation"));
     Require(Operations.Num() <= 1000, TEXT("At most 1000 operations per batch"));
     for (const auto& Value : Operations)
     {
@@ -1691,6 +1713,8 @@ int32 UUAssetAgentCommandlet::Main(const FString& Params)
         FJson Request;
         Require(FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Request) && Request.IsValid(), TEXT("Request must be a JSON object"));
         Execute(Request, Response);
+        // Loading the broken asset can log errors before a successful repair.
+        UseCommandletResultAsExitCode = String(Request, TEXT("action")) == TEXT("apply") && Boolean(Request, TEXT("repair"));
         Response->SetBoolField(TEXT("ok"), true);
     }
     catch (const FFailure& Failure)

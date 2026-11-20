@@ -50,11 +50,23 @@ bool FUAssetAgentCompactResponsesTest::RunTest(const FString& Parameters)
         FJson Change = Json(TEXT(R"json({"action":"apply","response_mode":"minimal","dry_run":true,
             "operations":[{"op":"add_node","id":"status","kind":"branch"}]})json"));
         Change->SetStringField(TEXT("expected_revision"), String(Summary, TEXT("revision")));
+        Change->SetBoolField(TEXT("repair"), true);
         FJson Applied = Run(Change);
+        TestTrue(TEXT("Repair reports initial compile status"), Boolean(Applied, TEXT("initial_compile_ok")));
+        TestTrue(TEXT("Repair includes initial diagnostics separately"), Applied->HasField(TEXT("initial_diagnostics")));
         TestFalse(TEXT("Minimal response has no graph snapshot"), Applied->HasField(TEXT("blueprint")));
         TestTrue(TEXT("Minimal response retains node aliases"), Object(Applied, TEXT("node_ids"))->HasField(TEXT("status")));
         TestTrue(TEXT("Minimal response retains compile diagnostics"), Applied->HasField(TEXT("diagnostics")));
         TestEqual(TEXT("Minimal preview returns revision"), String(Applied, TEXT("revision")), String(Summary, TEXT("revision")));
+        Ship->ParentClass = nullptr;
+        FJson Repair = Json(TEXT(R"json({"action":"apply","response_mode":"minimal","dry_run":true,
+            "repair":true,"operations":[{"op":"reparent","parent_class":"/Script/Engine.Actor"}]})json"));
+        Repair->SetStringField(TEXT("expected_revision"), String(Summary, TEXT("revision")));
+        FJson Repaired = Run(Repair);
+        TestFalse(TEXT("Missing parent is reported before reparent"), Boolean(Repaired, TEXT("initial_compile_ok")));
+        TestTrue(TEXT("Initial missing-parent diagnostic survives repair"), !Array(Repaired, TEXT("initial_diagnostics")).IsEmpty());
+        TestTrue(TEXT("Restored actor parent compiles"), Ship->ParentClass == AActor::StaticClass() && Ship->Status != BS_Error);
+        TestEqual(TEXT("Repair preview preserves disk revision"), Revision(AssetFilename(Package)), String(Summary, TEXT("revision")));
     }
     catch (const UAssetAgent::FFailure& Failure) { AddError(Failure.Message); }
     return true;
