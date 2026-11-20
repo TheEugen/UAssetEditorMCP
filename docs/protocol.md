@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 7
+# UAsset Agent JSON protocol, version 8
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -841,3 +841,20 @@ after saves can leave a **partial multi-package result**; use `saved_assets` and
 ### Repairing an existing Blueprint
 
 Set `repair: true` on `apply` to edit a Blueprint with compile errors. Inspect `initial_compile_ok` and `initial_diagnostics` for its starting state. A missing parent requires `reparent` as the first operation. The final compile, revision checks and backup requirements still apply.
+
+### Reflected properties on non-Blueprint assets
+
+Use `blueprint_asset_inspect`, `blueprint_asset_apply` and `blueprint_asset_create` through MCP, or send the corresponding JSON actions through the CLI. Inspection returns the class, SHA-1 revision and editable property names with their Unreal text values and C++ types. Dot paths traverse structs. Array indices are zero-based and each operation sees the result of the preceding operation.
+
+```json
+{"action":"asset_create","asset":"/Game/Labels/TestLabel","class":"/Script/Engine.PrimaryAssetLabel","properties":{"Rules.Priority":"2","bIsRuntimeLabel":"True"},"dry_run":true}
+{"action":"asset_inspect","asset":"/Game/Labels/TestLabel"}
+{"action":"asset_apply","asset":"/Game/Labels/TestLabel","expected_revision":"<SHA-1 from inspect>","operations":[
+  {"op":"set_property","property":"Rules.Priority","value":"3"},
+  {"op":"array_add","property":"ExplicitAssets","value":"/Game/Items/ItemA.ItemA"},
+  {"op":"array_set","property":"ExplicitAssets","index":0,"value":"/Game/Items/ItemB.ItemB"},
+  {"op":"array_remove","property":"ExplicitAssets","index":0}
+],"dry_run":true}
+```
+
+Both write actions preview by default. Repeat with `dry_run:false` to persist. Updates require a single writable package and return a backup under `backups`. Creation requires a new package path and a concrete data asset class (including a generated data asset class) or a matching editor factory that can create its asset unattended. Creation accepts an optional array of operations following the initial properties. Supply values as Unreal text strings. Use the Blueprint and level tools for graph and map edits.

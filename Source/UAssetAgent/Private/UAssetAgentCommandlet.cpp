@@ -8,6 +8,8 @@
 #include "EdGraphSchema_K2.h"
 #include "EditorWorldUtils.h"
 #include "Engine/Blueprint.h"
+#include "Engine/DataAsset.h"
+#include "Factories/Factory.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/Engine.h"
 #include "Engine/Level.h"
@@ -1326,6 +1328,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 }
 
 #include "UAssetAgentMaintenance.inl"
+#include "UAssetAgentAssets.inl"
 #include "UAssetAgentMaterials.inl"
 #include "UAssetAgentLevels.inl"
 #include "UAssetAgentReferences.inl"
@@ -1376,8 +1379,10 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 7);
+    Response->SetNumberField(TEXT("protocol_version"), 8);
     Response->SetBoolField(TEXT("saved"), false);
+    if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
+    { ReflectedAssetAction(Action, Request, Response); return; }
     if (Action == TEXT("replace_references")) { ReplaceReferencesAction(Request, Response); return; }
     if (Action == TEXT("references") || Action == TEXT("find_path"))
     { ReferenceAction(Request, Response, Action == TEXT("find_path")); return; }
@@ -1678,6 +1683,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 #if WITH_DEV_AUTOMATION_TESTS
 #include "UAssetAgentTests.inl"
 #include "UAssetAgentMaterialTests.inl"
+#include "UAssetAgentAssetTests.inl"
 #include "UAssetAgentLevelTests.inl"
 #include "UAssetAgentReferenceTests.inl"
 #include "UAssetAgentReplaceReferenceTests.inl"

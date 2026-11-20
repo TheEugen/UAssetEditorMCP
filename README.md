@@ -17,6 +17,11 @@ against Blueprint callers, deletes assets with referencer checks,
 and fixes redirectors in folders. See [the protocol](docs/protocol.md)
 for the precise supported subset.
 
+For non-Blueprint assets, `blueprint_asset_inspect` returns editable reflected
+properties and a revision. Use `blueprint_asset_apply` to update a property or
+array element and `blueprint_asset_create` to create a data asset. Both preview
+by default. Blueprint edits also support `repair: true` for compile errors.
+
 The Win64 plugin has been built with UE 5.4.4. Rebuild the
 plugin before using the new requests and run the relevant integration suite in
 a disposable project.

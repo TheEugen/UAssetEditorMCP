@@ -35,7 +35,7 @@ def validate_request(request):
     action = request.get("action")
     if "repair" in request and (action != "apply" or not isinstance(request["repair"], bool)):
         raise AgentError("repair must be a boolean on apply")
-    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path", "replace_references"}:
+    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "asset_inspect", "asset_apply", "asset_create", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path", "replace_references"}:
         raise AgentError("Unknown action; read blueprint_protocol for supported actions")
     if action in {"list", "compile", "redirectors", "fixup_redirectors"}:
         path = request.get("path", "/Game")
@@ -70,7 +70,7 @@ def validate_request(request):
             action not in {"inspect", "apply", "create"} or mode not in ("summary", "full") or
             not isinstance(request["include_components"], bool)):
         raise AgentError("include_components must be a boolean and requires summary or full")
-    if action in {"inspect", "components", "apply", "create", "delete_asset", "material_inspect", "material_apply", "level_inspect", "level_apply"}:
+    if action in {"inspect", "components", "apply", "create", "delete_asset", "asset_inspect", "asset_apply", "asset_create", "material_inspect", "material_apply", "level_inspect", "level_apply"}:
         asset = request.get("asset", "")
         if (not isinstance(asset, str) or not asset.startswith("/Game/") or
                 any(c in asset for c in (".", "\\", ":")) or
@@ -94,7 +94,13 @@ def validate_request(request):
         for field in ("include_soft", "recursive"):
             if field in request and not isinstance(request[field], bool):
                 raise AgentError(field + " must be a boolean")
-    if action in {"apply", "create", "material_apply", "level_apply"}:
+    if action == "asset_create":
+        if not isinstance(request.get("class"), str) or not request["class"].strip():
+            raise AgentError("asset_create requires a concrete asset class path")
+        properties = request.get("properties", {})
+        if not isinstance(properties, dict) or any(not key or not isinstance(value, str) for key, value in properties.items()):
+            raise AgentError("properties must map property paths to Unreal text strings")
+    if action in {"apply", "create", "material_apply", "level_apply", "asset_apply"} or (action == "asset_create" and "operations" in request):
         ops = request.get("operations")
         if not isinstance(ops, list) or len(ops) > 1000:
             raise AgentError("operations must be an array of at most 1000 operations")
@@ -130,7 +136,7 @@ def validate_request(request):
             raise AgentError("expected_revisions must be a fixup_redirectors or replace_references revision map")
         for asset, revision in revisions.items():
             validate_request({"action": "inspect", "asset": asset, "expected_revision": revision})
-    if action in {"material_apply", "level_apply"} or "expected_revision" in request:
+    if action in {"material_apply", "level_apply", "asset_apply"} or "expected_revision" in request:
         revision = request.get("expected_revision")
         if not isinstance(revision, str) or len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
             raise AgentError("expected_revision must be the SHA-1 revision returned by inspect")
@@ -340,6 +346,16 @@ def tool_definitions():
     definitions = []
     specs = [
         ("blueprint_list", "List Blueprint assets under /Game.", {"path": {"type": "string"}}, []),
+        ("blueprint_asset_inspect", "Inspect a saved non-Blueprint asset's class, editable properties in Unreal text format, and revision.",
+         {"asset": asset}, ["asset"]),
+        ("blueprint_asset_apply", "Edit reflected properties and array elements on a non-Blueprint asset. Defaults to a dry run.",
+         {"asset": asset, "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
+          "dry_run": {"type": "boolean", "default": True}}, ["asset", "expected_revision", "operations"]),
+        ("blueprint_asset_create", "Create a concrete data asset or an asset with a compatible headless factory. Defaults to a dry run.",
+         {"asset": asset, "class": {"type": "string"}, "properties": {"type": "object", "additionalProperties": {"type": "string"}},
+          "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
+          "dry_run": {"type": "boolean", "default": True}}, ["asset", "class"]),
         ("blueprint_material_inspect", "Inspect a Material Instance Constant, its parent and its scalar, vector, texture and static switch parameters.", {"asset": asset}, ["asset"]),
         ("blueprint_material_apply", "Apply Material Instance Constant parameter overrides or change its parent. Defaults to a dry run. Read blueprint_protocol for operations.", {
             "asset": asset, "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
@@ -518,7 +534,7 @@ def main(argv=None):
                     raise AgentError("Request exceeds 4 MiB")
                 request = read_json(text)
                 if args.dry_run:
-                    if not isinstance(request, dict) or request.get("action") not in {"apply", "create", "delete_asset", "fixup_redirectors", "material_apply", "level_apply", "replace_references"}:
+                    if not isinstance(request, dict) or request.get("action") not in {"apply", "create", "delete_asset", "fixup_redirectors", "material_apply", "level_apply", "asset_apply", "asset_create", "replace_references"}:
                         raise AgentError("--dry-run requires an edit or maintenance request")
                     request["dry_run"] = True
             elif args.command == "functions":
