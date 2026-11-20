@@ -6,24 +6,25 @@ JSON operations; Unreal edits the Blueprint graphs, compiles them and saves real
 
 Implemented: inspect/list Blueprints, compact summaries and single-graph responses,
 batch compile checks without saving, discover reflected functions, create normal,
-Animation and Widget Blueprints, re-parent them, inspect/edit component-template defaults,
+Animation, Widget and Function Library Blueprints, re-parent supported types, inspect/edit component-template defaults,
 add/delete typed member variables, edit custom-event parameters and RPC flags,
 list redirectors and broken destination chains, add functions, add/call events and functions,
 connect/disconnect pins, set defaults, delete/move nodes, add replicated variables,
 RepNotify functions and server/client/multicast RPCs. Protocol 2 also edits anim
 node properties/function bindings, retargets AnimBP variables to inherited members,
-edits widget trees/slots/delegate events, deletes assets with referencer checks,
+edits widget trees/slots/delegate events, checks Function Library signature changes
+against Blueprint callers, deletes assets with referencer checks,
 and fixes redirectors in folders. See [the protocol](docs/protocol.md)
 for the precise supported subset.
 
 **Status:** v1 was built and exercised end to end in Lyra in the reported
 13 November session: list, inspect, function lookup, dry-run compilation,
 create/save, apply/save/backup and stale-revision rejection. The v2 source includes
-Python client tests, seven native automation cases, and commandlet persistence
+Python client tests, native automation cases, and commandlet persistence
 tests. The optional C++ API checker can verify engine imports as well as syntax.
-The full build is currently blocked in this workspace by denied writes to
-UnrealBuildTool's external `MarketplaceRules.dll` cache, so its expanded runtime
-integration checks have not run. Rebuild the plugin before using the new requests.
+The Win64 plugin builds with the Unreal-Merge UE 5.4.4 checkout. Rebuild the
+plugin before using the new requests and run the relevant integration suite in
+a disposable project.
 
 ## Install and build
 
@@ -44,7 +45,7 @@ Use `install --update` after changing the plugin sources, then rebuild.
 For a C++ project, build its Development Editor target (substitute its actual name):
 
 ```powershell
-& "F:\UnrealMarketplace\UE_5.4\Engine\Build\BatchFiles\Build.bat" `
+& "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Build\BatchFiles\Build.bat" `
   YourGameEditor Win64 Development `
   "-Project=D:\YourGame\YourGame.uproject" -WaitMutex -NoHotReloadFromIDE
 ```
@@ -53,7 +54,7 @@ For a Blueprint-only project, package the plugin first using Unreal's BuildPlugi
 command, then install the resulting plugin including its binaries:
 
 ```powershell
-.\build-plugin.ps1 -EngineRoot "F:\UnrealMarketplace\UE_5.4"
+.\build-plugin.ps1 -EngineRoot "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
 
 py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" install `
   --source .\build\UE5.4 --update
@@ -83,7 +84,7 @@ repository so `blueprint_protocol` serves the updated protocol text.
 ## Use from a coding agent or terminal
 
 ```powershell
-$env:UE_ENGINE_ROOT = "F:\UnrealMarketplace\UE_5.4"
+$env:UE_ENGINE_ROOT = "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
 
 py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" list
 
@@ -131,6 +132,26 @@ repeated startup costs. This version does not edit live inside an open editor.
 
 ## Connect an MCP-capable agent
 
+For **Codex CLI**, use [examples/codex-config.toml](examples/codex-config.toml),
+preconfigured for the Lyra paths above. Install it from your terminal:
+
+```powershell
+& 'F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Binaries\ThirdParty\Python3\Win64\python.exe' `
+  'F:\PP-GPT\UassetEditor\configure_codex.py'
+codex mcp list
+```
+
+The helper requires Python 3.11 (bundled with this UE installation), preserves
+existing Codex settings, backs up the config and appends the server table.
+Identical settings are left unchanged; a conflicting server table is reported
+without overwriting it. Use `--config <path>` to select another config file, or
+merge the example manually. Restart Codex and check `/mcp`, then ask it to read
+`blueprint_protocol`. The config sets a 30-minute Unreal timeout and a longer
+Codex tool timeout for project-wide compile checks. No separate MCP server or
+pip package is needed. Keep Unreal closed when using the asset tools.
+
+Codex configuration fields follow the [official MCP configuration documentation](https://developers.openai.com/codex/mcp/).
+
 Add [examples/mcp-config.json](examples/mcp-config.json) to your agent's MCP
 configuration, replacing the project, engine and Python paths. Keep this repo
 alongside the plugin; the Python server reads its bundled protocol document.
@@ -149,14 +170,14 @@ Inspect/create/apply accept `response_mode: "summary"` or
 `response_mode: "graph", graph: "EventGraph"`; the default remains `full`.
 Reinstall/rebuild the native plugin and restart the MCP server when upgrading.
 
-New mutation operations use the existing `blueprint_apply` batch and its revision,
-dry-run, compile and backup handling: `reparent`, `set_component_default`,
-`delete_variable`, and `edit_custom_event`. Read the protocol for selectors,
-parameter replacement behavior and reference/link checks.
+Mutation operations use the existing revision, dry-run, compile and backup
+workflow. Use `change_variable_type` for a declared member and
+`replace_component_class` for a local SCS component. Read the protocol for
+type descriptors, component selectors and dependent Blueprint checks.
 
 Suggested instruction for your coding agents:
 
-> Use UAsset Agent to edit normal, Animation and Widget Blueprints. Read blueprint_protocol first.
+> Use UAsset Agent to edit normal, Animation, Widget and Function Library Blueprints. Read blueprint_protocol first.
 > Inspect the asset and use its revision. Construct one batch, dry-run it, inspect
 > compiler diagnostics, then apply it. Use node aliases inside the batch and GUIDs
 > for existing nodes. Never hex-edit .uasset files. Report gameplay behavior that
@@ -166,8 +187,8 @@ Suggested instruction for your coding agents:
 
 ```powershell
 py -3.9 -m unittest discover -s tests -p "test_*.py" -v
-py -3.9 tests/check_cpp_headers.py --engine "F:\UnrealMarketplace\UE_5.4"
-py -3.9 tests/check_cpp_headers.py --engine "F:\UnrealMarketplace\UE_5.4" --link
+py -3.9 tests/check_cpp_headers.py --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
+py -3.9 tests/check_cpp_headers.py --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release" --link
 ```
 
 The header check uses the installed MSVC and engine headers to check the native
@@ -182,7 +203,7 @@ After building/installing the plugin in the disposable `tests/Host` project:
 
 ```powershell
 py -3.9 tests/integration_unreal.py --project tests/Host/UAssetAgentHost.uproject `
-  --engine "F:\UnrealMarketplace\UE_5.4"
+  --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
 ```
 
 The integration check creates a unique folder of test assets and retains them
@@ -193,11 +214,12 @@ re-parenting, variable deletion, event changes and native component defaults.
 
 The plugin also includes native automation tests under `UAssetAgent` for
 re-parenting/cycles, local/inherited/native component defaults, parameter-link
-preservation and variable deletion, and valid/broken/cyclic redirector chains.
+preservation and variable deletion, variable/component type changes with dependent Blueprint checks, and
+valid/broken/cyclic redirector chains.
 After installing the rebuilt plugin, run them in the disposable host project:
 
 ```powershell
-& "F:\UnrealMarketplace\UE_5.4\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+& "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
   "$PWD\tests\Host\UAssetAgentHost.uproject" -unattended -NullRHI -nosound -nop4 `
   '-ExecCmds=Automation RunTests UAssetAgent' '-TestExit=Automation Test Queue Empty' `
   "-abslog=$PWD\tests\Host\Saved\UAssetAgentAutomation.log"
@@ -212,7 +234,7 @@ Run the new commandlet persistence suite after rebuilding the host plugin:
 
 ```powershell
 py -3.9 tests/integration_v2.py --project tests/Host/UAssetAgentHost.uproject `
-  --engine "F:\UnrealMarketplace\UE_5.4"
+  --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
 ```
 
 It runs dry runs and real saves, reloads in fresh processes, checks compact
@@ -221,6 +243,14 @@ GameplayTag literal replacement, revision conflicts and backups, then deletes
 its own temporary fixtures. The host includes the four fixture GameplayTags in
 `tests/Host/Config/DefaultGameplayTags.ini`; register these tags if using another
 disposable project for this suite.
+For Function Libraries, run the persistence and caller-check suite against the
+same disposable host project:
+
+```powershell
+py -3.9 tests/integration_function_library.py --project tests/Host/UAssetAgentHost.uproject `
+  --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
+```
+
 The specific Lyra ABP_Wheel/sail/pump/capstan/cannon and HUD migrations still need
 acceptance runs on project copies after the Lyra plugin is rebuilt; these generic
 fixtures do not prove gameplay behavior or the project-specific native bindings.

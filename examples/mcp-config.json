@@ -5,7 +5,7 @@
       "args": [
         "F:/PP-GPT/UassetEditor/uasset_agent.py",
         "--project", "D:/YourGame/YourGame.uproject",
-        "--engine", "F:/UnrealMarketplace/UE_5.4",
+        "--engine", "F:/Unreal-Merge/Unreal/UnrealEngine-5.4.4-release",
         "mcp"
       ],
       "env": {"PYTHONUTF8": "1"}

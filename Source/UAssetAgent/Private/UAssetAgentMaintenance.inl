@@ -10,6 +10,41 @@ static TArray<FName> Referencers(IAssetRegistry& Registry, FName Package)
     return Result;
 }
 
+static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, bool IncludeChildReferencers = false)
+{
+    IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+    Registry.SearchAllAssets(true);
+    const FName Root = Blueprint->GetOutermost()->GetFName();
+    TArray<FName> Pending = Referencers(Registry, Root);
+    TSet<FName> Visited{Root};
+    TArray<UBlueprint*> Result;
+    for (int32 I = 0; I < Pending.Num(); ++I)
+    {
+        const FName Package = Pending[I];
+        if (Visited.Contains(Package)) { continue; }
+        Visited.Add(Package);
+        UPackage* Loaded = LoadPackage(nullptr, *Package.ToString(), LOAD_None);
+        Require(Loaded != nullptr, TEXT("Cannot load a referencing package: ") + Package.ToString());
+        Loaded->FullyLoad();
+        TArray<UObject*> Objects;
+        GetObjectsWithOuter(Loaded, Objects, true, RF_Transient);
+        for (UObject* Object : Objects)
+        {
+            if (Object->IsA<UObjectRedirector>() && Object->GetOuter() == Loaded)
+            { Pending.Append(Referencers(Registry, Package)); }
+            if (UBlueprint* Referencer = Cast<UBlueprint>(Object))
+            {
+                Result.Add(Referencer);
+                if (IncludeChildReferencers && Blueprint->GeneratedClass && Referencer->ParentClass &&
+                    Referencer->ParentClass->IsChildOf(Blueprint->GeneratedClass))
+                { Pending.Append(Referencers(Registry, Package)); }
+            }
+        }
+    }
+    Result.Sort([](const UBlueprint& A, const UBlueprint& B) { return A.GetPathName() < B.GetPathName(); });
+    return Result;
+}
+
 static FString MaintenanceFile(IAssetRegistry& Registry, const FString& Package)
 {
     Require(Package.StartsWith(TEXT("/Game/")) && FPackageName::IsValidLongPackageName(Package), TEXT("Maintenance only supports /Game packages: ") + Package);

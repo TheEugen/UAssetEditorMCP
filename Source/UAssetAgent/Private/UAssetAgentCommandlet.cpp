@@ -7,6 +7,7 @@
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "Engine/Engine.h"
 #include "Engine/InheritableComponentHandler.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -23,6 +24,7 @@
 #include "K2Node_Self.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
+#include "Kismet/BlueprintFunctionLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -31,6 +33,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
+#include "Serialization/ArchiveReplaceObjectRef.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SavePackage.h"
@@ -55,6 +58,7 @@
 #include "IAssetTools.h"
 #include "ObjectTools.h"
 #include "UObject/Package.h"
+#include "UObject/UObjectHash.h"
 
 namespace UAssetAgent
 {
@@ -195,6 +199,15 @@ static TArray<FComponentTemplate> ComponentTemplates(UBlueprint* BP)
     }
     Result.Sort([](const FComponentTemplate& A, const FComponentTemplate& B) { return A.Id < B.Id; });
     return Result;
+}
+
+static FComponentTemplate SelectComponent(UBlueprint* BP, const FString& Selector)
+{
+    TArray<FComponentTemplate> Matches;
+    for (const FComponentTemplate& Candidate : ComponentTemplates(BP))
+    { if (Candidate.Id == Selector || Candidate.Name == Selector) { Matches.Add(Candidate); } }
+    Require(Matches.Num() == 1, TEXT("Component not found or ambiguous; use an id from components inspection: ") + Selector);
+    return Matches[0];
 }
 
 static TArray<TSharedPtr<FJsonValue>> DescribeComponents(UBlueprint* BP, bool IncludeDefaults)
@@ -396,6 +409,33 @@ static FJson DescribeNode(UEdGraphNode* Node)
     return J;
 }
 
+static bool IsFunctionOutput(const FProperty* Property)
+{
+    return Property->HasAnyPropertyFlags(CPF_OutParm | CPF_ReturnParm) && !Property->HasAnyPropertyFlags(CPF_ReferenceParm);
+}
+
+static FJson DescribeFunction(const UFunction* Function)
+{
+    FJson Description = MakeShared<FJsonObject>();
+    Description->SetStringField(TEXT("name"), Function->GetName());
+    Description->SetStringField(TEXT("class"), Function->GetOwnerClass()->GetPathName());
+    Description->SetBoolField(TEXT("pure"), Function->HasAnyFunctionFlags(FUNC_BlueprintPure));
+    Description->SetBoolField(TEXT("static"), Function->HasAnyFunctionFlags(FUNC_Static));
+    TArray<TSharedPtr<FJsonValue>> Parameters;
+    for (TFieldIterator<FProperty> P(Function); P && P->HasAnyPropertyFlags(CPF_Parm); ++P)
+    {
+        FJson Parameter = MakeShared<FJsonObject>();
+        Parameter->SetStringField(TEXT("name"), P->GetName());
+        FEdGraphPinType Type;
+        GetDefault<UEdGraphSchema_K2>()->ConvertPropertyToPinType(*P, Type);
+        Parameter->SetObjectField(TEXT("type"), DescribeType(Type));
+        Parameter->SetBoolField(TEXT("output"), IsFunctionOutput(*P));
+        Parameters.Add(JsonValue(Parameter));
+    }
+    Description->SetArrayField(TEXT("parameters"), Parameters);
+    return Description;
+}
+
 static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
 {
     const FString Mode = String(Request, TEXT("response_mode"), TEXT("full"), false);
@@ -404,6 +444,18 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
     J->SetStringField(TEXT("asset"), BP->GetOutermost()->GetName());
     J->SetStringField(TEXT("parent_class"), BP->ParentClass ? BP->ParentClass->GetPathName() : FString());
     J->SetStringField(TEXT("kind"), BlueprintKind(BP));
+    if (BP->BlueprintType == BPTYPE_FunctionLibrary && BP->GeneratedClass)
+    {
+        J->SetStringField(TEXT("generated_class"), BP->GeneratedClass->GetPathName());
+        TArray<TSharedPtr<FJsonValue>> Functions;
+        for (const UEdGraph* Graph : BP->FunctionGraphs)
+        {
+            if (Mode == TEXT("graph") && Graph->GetName() != Selected && Graph->GetPathName() != Selected) { continue; }
+            if (const UFunction* Function = BP->GeneratedClass->FindFunctionByName(Graph->GetFName(), EIncludeSuperFlag::ExcludeSuper))
+            { Functions.Add(JsonValue(DescribeFunction(Function))); }
+        }
+        J->SetArrayField(TEXT("functions"), Functions);
+    }
     if (UAnimBlueprint* Anim = Cast<UAnimBlueprint>(BP))
     {
         J->SetStringField(TEXT("skeleton"), Anim->TargetSkeleton ? Anim->TargetSkeleton->GetPathName() : FString());
@@ -506,6 +558,8 @@ static bool Compile(UBlueprint* BP, const FJson& Response, EBlueprintCompileOpti
     return Log.NumErrors == 0 && BP->Status != BS_Error;
 }
 
+#include "UAssetAgentMemberTypes.inl"
+
 class FEditor
 {
 public:
@@ -518,6 +572,8 @@ public:
     TSet<FName> PlannedFunctionDeletes;
     TSet<FName> CompletedFunctionDeletes;
     TArray<FJson> DeferredDefaults;
+    bool bChangedVariableType = false;
+    TArray<USCS_Node*> ChangedComponentClasses;
     bool bRefreshAfterBatch = false;
     EBlueprintCompileOptions CompileOptions = EBlueprintCompileOptions::None;
     explicit FEditor(UBlueprint* InBP, const FJson& InResponse) : BP(InBP), Response(InResponse) {}
@@ -599,11 +655,12 @@ public:
         return G;
     }
 
-    void EditEventParameters(UK2Node_CustomEvent* Event, const FJson& Op)
+    TArray<TSharedPtr<FUserPinInfo>> ReplacementParameters(UK2Node_EditablePinBase* Node, const FJson& Op,
+        const TCHAR* Key, EEdGraphPinDirection Direction)
     {
         TArray<TSharedPtr<FUserPinInfo>> Parameters;
         TSet<FName> Names;
-        for (const TSharedPtr<FJsonValue>& Value : Array(Op, TEXT("inputs"), true))
+        for (const TSharedPtr<FJsonValue>& Value : Array(Op, Key, true))
         {
             FJson P = AsObject(Value);
             const FString Name = String(P, TEXT("name"));
@@ -611,24 +668,30 @@ public:
             FName PinName(*Name);
             Require(!Names.Contains(PinName), TEXT("Duplicate parameter name: ") + Name);
             Names.Add(PinName);
-            UEdGraphPin* Existing = Event->FindPin(PinName);
+            UEdGraphPin* Existing = Node->FindPin(PinName);
             // UserDefinedPinExists is not exported by BlueprintGraph in UE 5.4.
-            Require(!Existing || Event->UserDefinedPins.ContainsByPredicate([&PinName](const TSharedPtr<FUserPinInfo>& Pin)
+            Require(!Existing || Node->UserDefinedPins.ContainsByPredicate([&PinName](const TSharedPtr<FUserPinInfo>& Pin)
             {
                 return Pin.IsValid() && Pin->PinName == PinName;
             }), TEXT("Parameter conflicts with a built-in pin: ") + Name);
             TSharedPtr<FUserPinInfo> Parameter = MakeShared<FUserPinInfo>();
             Parameter->PinName = PinName;
             Parameter->PinType = PinType(Object(P, TEXT("type")));
-            Parameter->DesiredPinDirection = EGPD_Output;
+            Parameter->DesiredPinDirection = Direction;
             FText Error;
-            Require(Event->CanCreateUserDefinedPin(Parameter->PinType, EGPD_Output, Error), TEXT("Invalid event parameter: ") + Error.ToString());
-            for (const TSharedPtr<FUserPinInfo>& Old : Event->UserDefinedPins)
+            Require(Node->CanCreateUserDefinedPin(Parameter->PinType, Direction, Error), TEXT("Invalid parameter: ") + Error.ToString());
+            for (const TSharedPtr<FUserPinInfo>& Old : Node->UserDefinedPins)
             {
                 if (Old->PinName == PinName && Old->PinType == Parameter->PinType) { Parameter->PinDefaultValue = Old->PinDefaultValue; }
             }
             Parameters.Add(Parameter);
         }
+        return Parameters;
+    }
+
+    void EditEventParameters(UK2Node_CustomEvent* Event, const FJson& Op)
+    {
+        TArray<TSharedPtr<FUserPinInfo>> Parameters = ReplacementParameters(Event, Op, TEXT("inputs"), EGPD_Output);
         TArray<UK2Node*> Nodes;
         Nodes.Add(Event);
         TArray<UEdGraph*> Graphs;
@@ -684,11 +747,93 @@ public:
         }
     }
 
+    UK2Node_FunctionResult* AddFunctionResult(UEdGraph* Graph, UK2Node_FunctionEntry* Entry)
+    {
+        FGraphNodeCreator<UK2Node_FunctionResult> Creator(*Graph);
+        UK2Node_FunctionResult* Result = Creator.CreateNode();
+        Result->FunctionReference = Entry->FunctionReference;
+        Creator.Finalize();
+        Result->NodePosX = 400;
+        return Result;
+    }
+
+    void EditFunctionParameters(UK2Node_EditablePinBase* Node, const FJson& Op, const TCHAR* Key,
+        EEdGraphPinDirection Direction)
+    {
+        TArray<TSharedPtr<FUserPinInfo>> Parameters = ReplacementParameters(Node, Op, Key, Direction);
+        for (const auto& Old : Node->UserDefinedPins)
+        {
+            if (Parameters.ContainsByPredicate([&](const auto& New)
+                { return Old->PinName == New->PinName && Old->PinType == New->PinType; })) { continue; }
+            if (UEdGraphPin* Pin = Node->FindPin(Old->PinName, Direction))
+            {
+                Require(Pin->LinkedTo.IsEmpty(), TEXT("Disconnect the function parameter before removing or changing its type: ") + Old->PinName.ToString());
+            }
+        }
+        Node->UserDefinedPins = MoveTemp(Parameters);
+        const bool Previous = Node->bDisableOrphanPinSaving;
+        Node->bDisableOrphanPinSaving = true;
+        Node->ReconstructNode();
+        Node->bDisableOrphanPinSaving = Previous;
+    }
+
+    void EditLibraryFunction(const FJson& Op)
+    {
+        Require(Op->HasField(TEXT("inputs")) || Op->HasField(TEXT("outputs")) || Op->HasField(TEXT("pure")),
+            TEXT("edit_function requires inputs, outputs or pure"));
+        const FName Name(*String(Op, TEXT("name")));
+        UEdGraph* G = nullptr;
+        for (UEdGraph* Candidate : BP->FunctionGraphs)
+        {
+            if (Candidate->GetFName() == Name) { G = Candidate; break; }
+        }
+        Require(G != nullptr, TEXT("Library function not found: ") + Name.ToString());
+        TArray<UK2Node_FunctionEntry*> Entries;
+        G->GetNodesOfClass(Entries);
+        Require(Entries.Num() == 1 && Entries[0]->IsEditable(), TEXT("Library function entry is not editable"));
+        UK2Node_FunctionEntry* Entry = Entries[0];
+        if (Op->HasField(TEXT("entry_id"))) { Remember(String(Op, TEXT("entry_id")), Entry); }
+        if (Op->HasField(TEXT("inputs"))) { EditFunctionParameters(Entry, Op, TEXT("inputs"), EGPD_Output); }
+
+        TArray<UK2Node_FunctionResult*> Results;
+        G->GetNodesOfClass(Results);
+        const bool AddResult = Results.IsEmpty() && !Array(Op, TEXT("outputs")).IsEmpty();
+        if (AddResult) { Results.Add(AddFunctionResult(G, Entry)); }
+        if (Op->HasField(TEXT("result_id")))
+        {
+            Require(Results.Num() == 1, TEXT("result_id requires exactly one return node"));
+            Remember(String(Op, TEXT("result_id")), Results[0]);
+        }
+        if (Op->HasField(TEXT("outputs")))
+        {
+            for (UK2Node_FunctionResult* Result : Results)
+            { EditFunctionParameters(Result, Op, TEXT("outputs"), EGPD_Input); }
+        }
+        if (AddResult)
+        {
+            UEdGraphPin* Then = Entry->FindPin(UEdGraphSchema_K2::PN_Then);
+            if (Then->LinkedTo.IsEmpty())
+            {
+                Require(G->GetSchema()->TryCreateConnection(Then, Results[0]->FindPin(UEdGraphSchema_K2::PN_Execute)),
+                    TEXT("Cannot connect function entry to result"));
+            }
+        }
+        if (Op->HasField(TEXT("pure")))
+        {
+            if (Boolean(Op, TEXT("pure"))) { Entry->AddExtraFlags(FUNC_BlueprintPure); }
+            else { Entry->ClearExtraFlags(FUNC_BlueprintPure); }
+        }
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+        bRefreshAfterBatch = true;
+    }
+
     #include "UAssetAgentV2Edit.inl"
 
     void Apply(const FJson& Op)
     {
         FString Kind = String(Op, TEXT("op"));
+        if (Kind == TEXT("edit_function") && BP->BlueprintType == BPTYPE_FunctionLibrary)
+        { EditLibraryFunction(Op); return; }
         if (ApplyV2(Op)) { return; }
         if (Kind == TEXT("reparent"))
         {
@@ -760,15 +905,31 @@ public:
             FBlueprintEditorUtils::RemoveMemberVariable(BP, Name);
             return;
         }
+        if (Kind == TEXT("change_variable_type"))
+        {
+            const FName Name(*String(Op, TEXT("name")));
+            bChangedVariableType |= ChangeVariableType(BP, Name, PinType(Object(Op, TEXT("type"))));
+            if (Op->HasField(TEXT("default")))
+            {
+                FJson Default = MakeShared<FJsonObject>();
+                Default->SetStringField(TEXT("property"), Name.ToString());
+                Default->SetStringField(TEXT("value"), ValueString(Op, TEXT("default")));
+                DeferredDefaults.Add(Default);
+            }
+            return;
+        }
+        if (Kind == TEXT("replace_component_class"))
+        {
+            if (USCS_Node* Changed = ReplaceComponentClass(BP, Op))
+            {
+                ChangedComponentClasses.AddUnique(Changed);
+            }
+            return;
+        }
         if (Kind == TEXT("set_component_default"))
         {
             Require(CompileCurrent(), TEXT("Compile failed before setting component default"));
-            const FString Selector = String(Op, TEXT("component"));
-            TArray<FComponentTemplate> Matches;
-            for (const FComponentTemplate& Candidate : ComponentTemplates(BP))
-            { if (Candidate.Id == Selector || Candidate.Name == Selector) { Matches.Add(Candidate); } }
-            Require(Matches.Num() == 1, TEXT("Component not found or ambiguous; use an id from components inspection: ") + Selector);
-            FComponentTemplate& Component = Matches[0];
+            const FComponentTemplate Component = SelectComponent(BP, String(Op, TEXT("component")));
             Require(!Component.Inherited || Component.Template->bEditableWhenInherited, TEXT("Component is not editable when inherited"));
             UActorComponent* Target = Component.Template;
             if (Component.Node && Component.Inherited)
@@ -831,14 +992,12 @@ public:
             G->GetNodesOfClass(Entries);
             Require(Entries.Num() == 1, TEXT("Function entry not found"));
             Parameters(Entries[0], Op, TEXT("inputs"), EGPD_Output);
+            if (BP->BlueprintType == BPTYPE_FunctionLibrary && Boolean(Op, TEXT("pure")))
+            { Entries[0]->AddExtraFlags(FUNC_BlueprintPure); }
             if (Op->HasField(TEXT("entry_id"))) { Remember(String(Op, TEXT("entry_id")), Entries[0]); }
             if (Array(Op, TEXT("outputs")).Num() > 0)
             {
-                FGraphNodeCreator<UK2Node_FunctionResult> Creator(*G);
-                UK2Node_FunctionResult* Result = Creator.CreateNode();
-                Result->FunctionReference = Entries[0]->FunctionReference;
-                Creator.Finalize();
-                Result->NodePosX = 400;
+                UK2Node_FunctionResult* Result = AddFunctionResult(G, Entries[0]);
                 Parameters(Result, Op, TEXT("outputs"), EGPD_Input);
                 if (Op->HasField(TEXT("result_id"))) { Remember(String(Op, TEXT("result_id")), Result); }
                 Require(G->GetSchema()->TryCreateConnection(Entries[0]->FindPin(UEdGraphSchema_K2::PN_Then), Result->FindPin(UEdGraphSchema_K2::PN_Execute)), TEXT("Cannot connect function entry to result"));
@@ -1059,6 +1218,48 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 }
 
 #include "UAssetAgentMaintenance.inl"
+#include "UAssetAgentFunctionLibrary.inl"
+
+static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
+    const TArray<TSharedPtr<FJsonValue>>& Operations)
+{
+    TSet<FName> Members;
+    TArray<USCS_Node*> Components;
+    for (const auto& Value : Operations)
+    {
+        const FJson Op = AsObject(Value);
+        const FString Kind = String(Op, TEXT("op"));
+        if (Kind == TEXT("change_variable_type")) { Members.Add(FName(*String(Op, TEXT("name")))); }
+        if (Kind == TEXT("replace_component_class"))
+        {
+            const FComponentTemplate Component = SelectComponent(Blueprint, String(Op, TEXT("component")));
+            if (Component.Node && !Component.Inherited)
+            {
+                Components.AddUnique(Component.Node);
+                Members.Add(Component.Node->GetVariableName());
+            }
+        }
+    }
+    TArray<FMemberDependent> Result;
+    if (Members.IsEmpty()) { return Result; }
+    for (UBlueprint* Referencer : ReferencingBlueprints(Blueprint, true))
+    {
+        const bool Child = Referencer->ParentClass && Referencer->ParentClass->IsChildOf(Blueprint->GeneratedClass);
+        FMemberNodeSnapshot Nodes = CaptureMemberNodes(Referencer, Blueprint, Members);
+        if (!Child && Nodes.Nodes.IsEmpty()) { continue; }
+        FMemberDependent Dependent{Referencer, Child, MoveTemp(Nodes), {}};
+        if (const UInheritableComponentHandler* Handler = Referencer->GetInheritableComponentHandler(false))
+        {
+            for (const USCS_Node* Component : Components)
+            {
+                if (const UActorComponent* Override = Handler->GetOverridenComponentTemplate(FComponentKey(Component)))
+                { Dependent.Overrides.Add(Component, Override->GetClass()); }
+            }
+        }
+        Result.Add(MoveTemp(Dependent));
+    }
+    return Result;
+}
 
 static void Execute(const FJson& Request, const FJson& Response)
 {
@@ -1156,24 +1357,7 @@ static void Execute(const FJson& Request, const FJson& Response)
         {
             if (!It->HasAnyFunctionFlags(FUNC_BlueprintCallable | FUNC_BlueprintPure | FUNC_BlueprintEvent) ||
                 (!Search.IsEmpty() && !It->GetName().Contains(Search))) { continue; }
-            FJson F = MakeShared<FJsonObject>();
-            F->SetStringField(TEXT("name"), It->GetName());
-            F->SetStringField(TEXT("class"), It->GetOwnerClass()->GetPathName());
-            F->SetBoolField(TEXT("pure"), It->HasAnyFunctionFlags(FUNC_BlueprintPure));
-            F->SetBoolField(TEXT("static"), It->HasAnyFunctionFlags(FUNC_Static));
-            TArray<TSharedPtr<FJsonValue>> Parameters;
-            for (TFieldIterator<FProperty> P(*It); P && P->HasAnyPropertyFlags(CPF_Parm); ++P)
-            {
-                FJson Param = MakeShared<FJsonObject>();
-                Param->SetStringField(TEXT("name"), P->GetName());
-                FEdGraphPinType Type;
-                GetDefault<UEdGraphSchema_K2>()->ConvertPropertyToPinType(*P, Type);
-                Param->SetObjectField(TEXT("type"), DescribeType(Type));
-                Param->SetBoolField(TEXT("output"), P->HasAnyPropertyFlags(CPF_OutParm | CPF_ReturnParm) && !P->HasAnyPropertyFlags(CPF_ReferenceParm));
-                Parameters.Add(JsonValue(Param));
-            }
-            F->SetArrayField(TEXT("parameters"), Parameters);
-            Functions.Add(JsonValue(F));
+            Functions.Add(JsonValue(DescribeFunction(*It)));
         }
         Response->SetArrayField(TEXT("functions"), Functions);
         return;
@@ -1189,10 +1373,16 @@ static void Execute(const FJson& Request, const FJson& Response)
     if (Action == TEXT("create"))
     {
         Require(!FPackageName::DoesPackageExist(Package), TEXT("Asset already exists"));
-        UClass* Parent = LoadObject<UClass>(nullptr, *String(Request, TEXT("parent_class"), TEXT("/Script/Engine.Actor"), false));
-        Require(Parent && FKismetEditorUtilities::CanCreateBlueprintOfClass(Parent), TEXT("Invalid Blueprint parent class"));
         const FString Kind = String(Request, TEXT("kind"), TEXT("normal"), false);
-        Require(Kind == TEXT("normal") || Kind == TEXT("animation") || Kind == TEXT("widget"), TEXT("kind must be normal, animation or widget"));
+        const bool Library = Kind == TEXT("function_library");
+        Require(Kind == TEXT("normal") || Kind == TEXT("animation") || Kind == TEXT("widget") || Library,
+            TEXT("kind must be normal, animation, widget or function_library"));
+        Require(!Library || (!Request->HasField(TEXT("skeleton")) && !Request->HasField(TEXT("template"))),
+            TEXT("skeleton and template are animation creation options"));
+        const FString DefaultParent = Library ? UBlueprintFunctionLibrary::StaticClass()->GetPathName() : TEXT("/Script/Engine.Actor");
+        UClass* Parent = LoadObject<UClass>(nullptr, *String(Request, TEXT("parent_class"), DefaultParent, false));
+        Require(Parent && (Library ? Parent == UBlueprintFunctionLibrary::StaticClass() :
+            FKismetEditorUtilities::CanCreateBlueprintOfClass(Parent)), TEXT("Invalid Blueprint parent class for the requested kind"));
         Require((Kind != TEXT("animation") || Parent->IsChildOf(UAnimInstance::StaticClass())) &&
             (Kind != TEXT("widget") || Parent->IsChildOf(UUserWidget::StaticClass())), TEXT("Parent class must match Blueprint kind"));
         UClass* AssetClass = UBlueprint::StaticClass();
@@ -1207,7 +1397,7 @@ static void Execute(const FJson& Request, const FJson& Response)
             FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("UMGEditor"));
             AssetClass = UWidgetBlueprint::StaticClass(); GeneratedClass = UWidgetBlueprintGeneratedClass::StaticClass();
         }
-        BP = FKismetEditorUtilities::CreateBlueprint(Parent, CreatePackage(*Package), FName(*FPackageName::GetLongPackageAssetName(Package)), BPTYPE_Normal, AssetClass, GeneratedClass);
+        BP = FKismetEditorUtilities::CreateBlueprint(Parent, CreatePackage(*Package), FName(*FPackageName::GetLongPackageAssetName(Package)), Library ? BPTYPE_FunctionLibrary : BPTYPE_Normal, AssetClass, GeneratedClass);
         if (UAnimBlueprint* Anim = Cast<UAnimBlueprint>(BP))
         {
             Anim->bIsTemplate = Boolean(Request, TEXT("template"));
@@ -1231,11 +1421,13 @@ static void Execute(const FJson& Request, const FJson& Response)
     Require(BP != nullptr, TEXT("Blueprint could not be loaded/created"));
     Require(BP->GetOutermost()->GetName() == Package,
         TEXT("Asset path resolves to another package through a redirector; use the destination Blueprint package path"));
-    Require((BP->GetClass() == UBlueprint::StaticClass() || BP->GetClass() == UAnimBlueprint::StaticClass() ||
-        BP->GetClass() == UWidgetBlueprint::StaticClass()) && BP->BlueprintType == BPTYPE_Normal,
-        TEXT("Only normal class, animation and widget Blueprints are supported"));
+    const bool Library = BP->BlueprintType == BPTYPE_FunctionLibrary && BP->GetClass() == UBlueprint::StaticClass();
+    Require(Library || ((BP->GetClass() == UBlueprint::StaticClass() || BP->GetClass() == UAnimBlueprint::StaticClass() ||
+        BP->GetClass() == UWidgetBlueprint::StaticClass()) && BP->BlueprintType == BPTYPE_Normal),
+        TEXT("Only normal class, animation, widget and function library Blueprints are supported"));
     if (Action == TEXT("components"))
     {
+        Require(!Library, TEXT("Function libraries have no component templates"));
         Response->SetArrayField(TEXT("components"), DescribeComponents(BP, true));
         Response->SetStringField(TEXT("revision"), Before);
         return;
@@ -1261,6 +1453,24 @@ static void Execute(const FJson& Request, const FJson& Response)
         if (String(Op, TEXT("op")) == TEXT("delete_function"))
         { Editor.PlannedFunctionDeletes.Add(FName(*String(Op, TEXT("name")))); }
     }
+    const TArray<FMemberDependent> MemberDependents = Action == TEXT("apply") && !Library ?
+        CaptureMemberDependents(BP, Operations) : TArray<FMemberDependent>();
+    TMap<FName, FLibrarySignature> LibrarySignatures;
+    TArray<FLibraryCaller> LibraryCallers;
+    if (Library)
+    {
+        for (int32 I = 0; I < Operations.Num(); ++I)
+        {
+            Response->SetNumberField(TEXT("operation_index"), I);
+            ValidateLibraryOperation(AsObject(Operations[I]));
+        }
+        Response->RemoveField(TEXT("operation_index"));
+        if (Action == TEXT("apply"))
+        {
+            LibrarySignatures = CaptureLibrarySignatures(BP, Operations);
+            if (!LibrarySignatures.IsEmpty()) { LibraryCallers = FindLibraryCallers(BP, LibrarySignatures); }
+        }
+    }
     for (int32 I = 0; I < Operations.Num(); ++I)
     {
         Response->SetNumberField(TEXT("operation_index"), I);
@@ -1269,10 +1479,13 @@ static void Execute(const FJson& Request, const FJson& Response)
     Response->RemoveField(TEXT("operation_index"));
     if (Editor.bRefreshAfterBatch) { FBlueprintEditorUtils::RefreshAllNodes(BP); }
     Require(Editor.CompileCurrent(), TEXT("Blueprint compilation failed; no asset was saved"));
+    if (!LibrarySignatures.IsEmpty()) { CheckLibraryCallers(BP, LibrarySignatures, LibraryCallers, Response); }
     for (const FJson& Op : Editor.DeferredDefaults)
     { Editor.SetDefault(String(Op, TEXT("property")), ValueString(Op, TEXT("value"))); }
     if (!Editor.DeferredDefaults.IsEmpty())
     { Require(Editor.CompileCurrent(), TEXT("Blueprint compilation failed after setting defaults; no asset was saved")); }
+    if (Action == TEXT("apply") && (Editor.bChangedVariableType || !Editor.ChangedComponentClasses.IsEmpty()))
+    { CheckMemberDependents(Editor.ChangedComponentClasses, MemberDependents, Response); }
     FJson Aliases = MakeShared<FJsonObject>();
     for (const auto& Pair : Editor.Aliases) { Aliases->SetStringField(Pair.Key, Guid(Pair.Value)); }
     Response->SetObjectField(TEXT("node_ids"), Aliases);

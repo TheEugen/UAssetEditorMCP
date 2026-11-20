@@ -139,7 +139,9 @@ bool ApplyV2(const FJson& Op)
     }
     if (Kind == TEXT("delete_function"))
     {
-        Require(BP->IsA<UAnimBlueprint>() || BP->IsA<UWidgetBlueprint>(), TEXT("delete_function requires an animation or widget Blueprint"));
+        const bool Library = BP->BlueprintType == BPTYPE_FunctionLibrary;
+        Require(Library || BP->IsA<UAnimBlueprint>() || BP->IsA<UWidgetBlueprint>(),
+            TEXT("delete_function requires an animation, widget or function library Blueprint"));
         const FString Name = String(Op, TEXT("name"));
         if (CompletedFunctionDeletes.Remove(FName(*Name))) { return true; }
         UEdGraph* Found = nullptr;
@@ -149,7 +151,8 @@ bool ApplyV2(const FJson& Op)
             Found->GetSchema()->IsA<UEdGraphSchema_K2>() && !Found->GetSchema()->GetClass()->GetName().Contains(TEXT("Animation")),
             TEXT("Only ordinary K2 function graphs may be deleted; animation layers/state machines are excluded"));
         FBlueprintEditorUtils::RemoveGraph(BP, Found, EGraphRemoveFlags::MarkTransient);
-        FBlueprintEditorUtils::MarkBlueprintAsModified(BP);
+        if (Library) { FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP); }
+        else { FBlueprintEditorUtils::MarkBlueprintAsModified(BP); }
         return true;
     }
     if (Kind == TEXT("add_widget"))

@@ -1,6 +1,6 @@
 # UAsset Agent JSON protocol, version 2
 
-Targets Unreal Engine 5.4.4 normal class, Animation and Widget Blueprints. The plugin loads the actual
+Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
 Use package paths such as `/Game/Characters/BP_Player`, never filesystem paths
 or `.uasset` extensions. Close this project's Unreal Editor before requests.
@@ -216,6 +216,21 @@ referencers; remove those uses first. It does not automatically delete getters,
 setters or a RepNotify function. Dynamic access by name and code references are
 outside this search. Compile affected Blueprints after changing public members.
 
+### Changing a local variable's type
+
+```json
+{"op":"change_variable_type","name":"Ocean","type":{
+  "category":"object","path":"/Game/Ocean/BP_Ocean_Time.BP_Ocean_Time_C"
+}}
+```
+
+Use the same type description as `add_variable`. The operation edits the
+declaration in place, retaining its name, GUID and compatible member flags.
+Supply `default` to set a new Blueprint class default using the new type.
+If a graph connection is incompatible with the new type, disconnect or remove
+the old use earlier in the batch and wire the replacement after the type
+change. Replicated variables cannot change to set types.
+
 ## Re-parenting
 
 ```json
@@ -263,6 +278,27 @@ complete Unreal text value. Values are validated in temporary storage before
 assignment. Transient, edit-constant and instance-only properties are rejected.
 This does not add/remove components, change attachments, edit placed actors,
 or configure components created dynamically by a construction script.
+
+### Replacing a component class
+
+```json
+{"op":"replace_component_class","component":"Solver","class":"/Game/Ocean/BPC_NewSolver.BPC_NewSolver_C"}
+```
+
+Use a component name or ID from `blueprint_components`. The operation
+replaces an authored SCS component on its declaring Blueprint. It retains the
+component variable name, GUID, attachment and compatible template properties.
+The replacement must be a concrete Actor Component class in the same scene
+or non-scene category. Inherited SCS components can be changed on their
+declaring Blueprint. Native subobjects and the generated default scene root
+are outside this operation.
+
+Both type changes reconstruct affected member nodes. For edits to saved
+assets, the commandlet also checks Blueprint dependents and reports them in
+`affected_blueprints`. It compiles dependent Blueprints in memory and blocks
+the save if a dependency fails or a child has a component template override
+of the old class. The operation saves the selected Blueprint asset. Placed
+actor instances and unrelated asset references require their own migration.
 
 ## Functions
 
@@ -528,6 +564,62 @@ the tree; summary omits widget/slot defaults and all node/pin lists.
 ```json
 {"action":"create","asset":"/Game/__UAssetAgentTests/W_Test","kind":"widget","parent_class":"/Script/UMG.UserWidget","operations":[{"op":"add_widget","id":"root","name":"Root","class":"/Script/UMG.Overlay"}],"dry_run":true,"response_mode":"summary"}
 ```
+
+## Blueprint Function Libraries
+
+Use `kind: "function_library"` with `blueprint_create`. The parent defaults to
+`/Script/Engine.BlueprintFunctionLibrary`. Library graphs can contain static
+functions and local graph logic. The supported operations are `add_function`,
+`edit_function`, `delete_function`, `add_node` (call, branch, sequence and reroute),
+`connect`, `disconnect`, `set_pin_default`, `move_node` and `delete_node`.
+
+```json
+{
+  "asset": "/Game/Utilities/BFL_Ship",
+  "kind": "function_library",
+  "dry_run": true,
+  "response_mode": "summary",
+  "operations": [
+    {"op":"add_function","name":"EchoCount","pure":true,"entry_id":"entry","result_id":"result",
+     "inputs":[{"name":"Count","type":{"category":"int"}}],
+     "outputs":[{"name":"Value","type":{"category":"int"}}]},
+    {"op":"connect","graph":"EchoCount","from":{"node":"entry","pin":"Count"},"to":{"node":"result","pin":"Value"}}
+  ]
+}
+```
+
+`pure` defaults to false on creation. Pure functions still use execution pins
+inside their own graph, while their call nodes expose data pins only. Inspect a
+saved library in `summary` mode for its revision, generated class path and
+reflected function signatures, which can include Unreal's generated
+`__WorldContext` parameter. Use `graph` mode for one function body. Pass
+the generated class path (for example `/Game/Utilities/BFL_Ship.BFL_Ship_C`) to
+`blueprint_functions` or to the `class` field of an `add_node` call operation.
+
+```json
+{"op":"edit_function","name":"EchoCount","inputs":[
+  {"name":"Count","type":{"category":"int"}},
+  {"name":"Extra","type":{"category":"int"}}
+]}
+```
+
+`edit_function` accepts any of `inputs`, `outputs` and `pure`. Each supplied
+parameter list replaces that side of the signature, and omitted fields retain
+their values. Disconnect changed parameters inside the function before
+replacing them. An empty list removes that side's user parameters. Optional
+`entry_id` and `result_id` aliases identify the entry and a single return node
+in the same batch. Use `delete_function` with the function's `name` to remove it.
+
+An apply batch that changes an existing library function signature or deletes
+a function reports `affected_callers`. It finds call nodes in Blueprint assets
+and level scripts by following on-disk package references. Each affected caller
+includes its package, Blueprint object path, function names, compatibility
+result and compiler diagnostics. The commandlet compiles callers in memory
+and saves only the library. A failed caller compile, a referenced deletion, or
+a removed, retyped or purity-changing signature used by an external caller
+blocks the save. An additive signature change can proceed when all affected
+callers compile. Run these checks through the normal revision-guarded dry run
+and repeat the same batch to save.
 
 ## Asset maintenance (protocol 2)
 

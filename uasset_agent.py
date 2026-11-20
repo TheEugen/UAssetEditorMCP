@@ -71,8 +71,13 @@ def validate_request(request):
             raise AgentError(field + " must be a boolean")
     if action == "create":
         kind = request.get("kind", "normal")
-        if not isinstance(kind, str) or kind not in {"normal", "animation", "widget"}:
-            raise AgentError("kind must be normal, animation or widget")
+        if not isinstance(kind, str) or kind not in {"normal", "animation", "widget", "function_library"}:
+            raise AgentError("kind must be normal, animation, widget or function_library")
+        if kind == "function_library":
+            if request.get("parent_class", "/Script/Engine.BlueprintFunctionLibrary") != "/Script/Engine.BlueprintFunctionLibrary":
+                raise AgentError("Function libraries must use /Script/Engine.BlueprintFunctionLibrary")
+            if "skeleton" in request or "template" in request:
+                raise AgentError("skeleton and template are animation creation options")
         if kind == "animation" and not request.get("template", False) and not isinstance(request.get("skeleton"), str):
             raise AgentError("Animation creation requires skeleton or template:true")
     if "expected_revisions" in request:
@@ -300,15 +305,15 @@ def tool_definitions():
          {"asset": asset}, ["asset"]),
         ("blueprint_compile", "Compile one Blueprint or recursively compile a folder in one Unreal process, without saving. Returns counts and only failures with diagnostics. Includes Blueprint subclasses. Editor must be closed; allow a long timeout for /Game.",
          {"path": {"type": "string", "default": "/Game", "description": "Blueprint package or recursive folder path under /Game; defaults to the entire /Game tree."}}, []),
-        ("blueprint_inspect", "Inspect normal, Animation or Widget Blueprints: graphs, pose links, anim function bindings/properties, widget tree/slots/bindings/animations, defaults and revision. summary omits nodes and pins; graph selects one graph.", {"asset": asset}, ["asset"]),
+        ("blueprint_inspect", "Inspect normal, Animation, Widget or Function Library Blueprints: graphs, pose links, anim function bindings/properties, widget tree/slots/bindings/animations, defaults and revision. summary omits nodes and pins; graph selects one graph.", {"asset": asset}, ["asset"]),
         ("blueprint_functions", "Discover callable functions and parameter types on a class, e.g. /Script/Engine.KismetSystemLibrary.",
          {"class": {"type": "string"}, "search": {"type": "string"}}, ["class"]),
-        ("blueprint_apply", "Edit normal, Animation or Widget Blueprints, compile and save. Includes reparent, inherited variable retargeting, anim properties/function bindings, widget tree/slot edits and delegate events. Read blueprint_protocol for operation shapes and limits. Use expected_revision; dry_run compiles without saving. Editor must be closed.",
+        ("blueprint_apply", "Edit and compile a Blueprint. Supports reparenting, inherited variable retargeting, animation properties and bindings, widget trees and delegates, and static library functions with caller checks. Use change_variable_type for local member variables and replace_component_class for authored components. Read blueprint_protocol for operation shapes and limits. Use expected_revision; dry_run compiles without saving. Editor must be closed.",
          {"asset": asset, "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
           "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "dry_run": {"type": "boolean"}}, ["asset", "operations", "expected_revision"]),
-        ("blueprint_create", "Create a normal, animation or widget Blueprint with operations, compile and save. Animation requires skeleton or template:true and an AnimInstance parent; widget requires a UserWidget parent. Never overwrites assets.",
+        ("blueprint_create", "Create a normal, animation, widget or function library Blueprint with operations, compile and save. Function libraries default to the BlueprintFunctionLibrary parent. Animation requires skeleton or template:true and an AnimInstance parent; widget requires a UserWidget parent. Never overwrites assets.",
          {"asset": asset, "parent_class": {"type": "string"}, "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
-          "kind": {"type": "string", "enum": ["normal", "animation", "widget"], "default": "normal"},
+          "kind": {"type": "string", "enum": ["normal", "animation", "widget", "function_library"], "default": "normal"},
           "skeleton": {"type": "string"}, "template": {"type": "boolean", "default": False},
           "dry_run": {"type": "boolean"}}, ["asset", "operations"]),
         ("blueprint_protocol", "Read the complete operation format, node types, pin references and examples before constructing an edit batch.", {}, [])]

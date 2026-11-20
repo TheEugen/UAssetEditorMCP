@@ -13,6 +13,7 @@ class V2ClientTests(unittest.TestCase):
         for request in [
             {"action": "create", "kind": "animation", "asset": "/Game/Test", "template": True, "operations": []},
             {"action": "create", "kind": "widget", "asset": "/Game/Test", "operations": []},
+            {"action": "create", "kind": "function_library", "asset": "/Game/Test", "operations": []},
             {"action": "delete_asset", "asset": "/Game/Test", "force": False, "dry_run": True},
             {"action": "fixup_redirectors", "path": "/Game", "expected_revisions": {"/Game/A": "a" * 40}},
         ]:
@@ -20,6 +21,8 @@ class V2ClientTests(unittest.TestCase):
         for request in [
             {"action": "create", "kind": [], "asset": "/Game/Test", "operations": []},
             {"action": "create", "kind": "animation", "asset": "/Game/Test", "operations": []},
+            {"action": "create", "kind": "function_library", "asset": "/Game/Test", "parent_class": "/Script/Engine.Actor", "operations": []},
+            {"action": "create", "kind": "function_library", "asset": "/Game/Test", "template": True, "operations": []},
             {"action": "delete_asset", "asset": "/Engine/Test"},
             {"action": "delete_asset", "asset": "/Game/Test", "force": "false"},
             {"action": "fixup_redirectors", "path": "/Game", "dry_run": "false"},
@@ -41,6 +44,8 @@ class V2ClientTests(unittest.TestCase):
         for action, args in [
             ("create", {"asset": "/Game/A", "kind": "animation", "template": True,
                         "parent_class": "/Script/Engine.AnimInstance", "operations": [], "response_mode": "summary"}),
+            ("create", {"asset": "/Game/Library", "kind": "function_library",
+                        "operations": [{"op": "add_function", "name": "GetCount", "pure": True}]}),
             ("apply", {"asset": "/Game/W", "expected_revision": "a" * 40, "operations": [
                 {"op": "bind_widget_event", "widget": "Btn", "event": "OnClicked", "id": "clicked"}]}),
             ("delete_asset", {"asset": "/Game/A", "dry_run": False, "expected_revision": "b" * 40}),

@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SphereComponent.h"
 #include "Engine/DataAsset.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
@@ -156,6 +157,92 @@ bool FUAssetAgentMemberTest::RunTest(const FString& Parameters)
         Editor.Apply(Json(TEXT("{\"op\":\"delete_node\",\"node\":\"set\"}")));
         Editor.Apply(Json(TEXT("{\"op\":\"delete_variable\",\"name\":\"Used\"}")));
         TestTrue(TEXT("Edited Blueprint compiles"), Editor.CompileCurrent());
+    }
+    catch (const FFailure& Failure) { AddError(Failure.Message); }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAssetAgentMemberTypeTest, "UAssetAgent.MemberTypes",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUAssetAgentMemberTypeTest::RunTest(const FString& Parameters)
+{
+    using namespace UAssetAgentTests;
+    try
+    {
+        const FString Root = TestRoot();
+        UBlueprint* BP = Blueprint(Root + TEXT("/BP_TypeChanges"));
+        const FString Asset = BP->GetOutermost()->GetName(), Filename = AssetFilename(Asset);
+        FEditor Editor(BP, MakeShared<FJsonObject>());
+        Editor.Apply(Json(TEXT(R"({"op":"add_variable","name":"Target","type":{"category":"object","path":"/Script/Engine.Pawn"}})")));
+        Editor.Apply(Json(TEXT(R"({"op":"add_variable","name":"Count","type":{"category":"int"}})")));
+        const FGuid VariableId = BP->NewVariables[FBlueprintEditorUtils::FindNewVariableIndex(BP, TEXT("Target"))].VarGuid;
+
+        USCS_Node* Hull = BP->SimpleConstructionScript->CreateNode(UStaticMeshComponent::StaticClass(), TEXT("Hull"));
+        USCS_Node* Detail = BP->SimpleConstructionScript->CreateNode(USceneComponent::StaticClass(), TEXT("Detail"));
+        BP->SimpleConstructionScript->AddNode(Hull);
+        Hull->AddChildNode(Detail);
+        const FGuid ComponentId = Hull->VariableGuid;
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+        Editor.Apply(Json(TEXT(R"json({"op":"set_component_default","component":"Hull","property":"RelativeLocation","value":"(X=12,Y=2,Z=3)"})json")));
+        Editor.Apply(Json(TEXT(R"({"op":"add_function","name":"ReadHull","outputs":[{"name":"Value","type":{"category":"object","path":"/Script/Engine.SceneComponent"}}],"result_id":"out"})")));
+        Editor.Apply(Json(TEXT(R"({"op":"add_node","graph":"ReadHull","id":"get","kind":"get","variable":"Hull"})")));
+        Editor.Apply(Json(TEXT(R"({"op":"connect","graph":"ReadHull","from":{"node":"get","pin":"Hull"},"to":{"node":"out","pin":"Value"}})")));
+        Require(Editor.CompileCurrent(), TEXT("Original member type fixture must compile"));
+        Save(BP);
+
+        UBlueprint* Child = Blueprint(Root + TEXT("/BP_TypeChild"), BP->GeneratedClass);
+        FEditor ChildEditor(Child, MakeShared<FJsonObject>());
+        ChildEditor.Apply(Json(TEXT(R"({"op":"add_function","name":"ReadPawn","outputs":[{"name":"Value","type":{"category":"object","path":"/Script/Engine.Pawn"}}],"result_id":"out"})")));
+        ChildEditor.Apply(Json(TEXT(R"({"op":"add_node","graph":"ReadPawn","id":"get","kind":"get","variable":"Target"})")));
+        ChildEditor.Apply(Json(TEXT(R"({"op":"connect","graph":"ReadPawn","from":{"node":"get","pin":"Target"},"to":{"node":"out","pin":"Value"}})")));
+        Require(ChildEditor.CompileCurrent(), TEXT("Original child must compile"));
+        Save(Child);
+        const FString ChildFilename = AssetFilename(Child->GetOutermost()->GetName());
+        const FString ChildRevision = Revision(ChildFilename);
+
+        const FJson Request = Json(TEXT(R"({"action":"apply","response_mode":"summary","operations":[
+            {"op":"change_variable_type","name":"Target","type":{"category":"object","path":"/Script/Engine.Character"}},
+            {"op":"change_variable_type","name":"Count","type":{"category":"string"},"default":"captain"},
+            {"op":"replace_component_class","component":"Hull","class":"/Script/Engine.SphereComponent"}
+        ]})"));
+        Request->SetStringField(TEXT("asset"), Asset);
+        Request->SetStringField(TEXT("expected_revision"), Revision(Filename));
+        const FJson Result = MakeShared<FJsonObject>();
+        Execute(Request, Result);
+        TestTrue(TEXT("Changed Blueprint saved"), Result->GetBoolField(TEXT("saved")));
+        TestEqual(TEXT("Child Blueprint validated"), Array(Result, TEXT("affected_blueprints")).Num(), 1);
+        TestEqual(TEXT("Child Blueprint file retained"), Revision(ChildFilename), ChildRevision);
+        const FBPVariableDescription& Target = BP->NewVariables[FBlueprintEditorUtils::FindNewVariableIndex(BP, TEXT("Target"))];
+        TestEqual(TEXT("Variable GUID retained"), Target.VarGuid, VariableId);
+        TestTrue(TEXT("Variable type changed to Character"), Target.VarType.PinSubCategoryObject.Get() == ACharacter::StaticClass());
+        TestTrue(TEXT("Local component changed to a sphere"), Hull->ComponentTemplate->IsA<USphereComponent>());
+        TestEqual(TEXT("Component GUID retained"), Hull->VariableGuid, ComponentId);
+        TestTrue(TEXT("Child component attachment retained"), Hull->GetChildNodes().Contains(Detail));
+        TestEqual(TEXT("Compatible component default retained"), CastChecked<USceneComponent>(Hull->ComponentTemplate)->GetRelativeLocation(), FVector(12, 2, 3));
+        UEdGraph* ReadHull = Editor.Graph(Json(TEXT(R"({"graph":"ReadHull"})")));
+        UEdGraphPin* HullPin = Editor.Node(ReadHull, TEXT("get"))->FindPin(TEXT("Hull"), EGPD_Output);
+        TestTrue(TEXT("Component graph connection retained"), HullPin && HullPin->LinkedTo.Num() == 1);
+        const FStrProperty* Count = FindFProperty<FStrProperty>(BP->GeneratedClass, TEXT("Count"));
+        TestTrue(TEXT("Changed variable default retained"), Count &&
+            Count->GetPropertyValue_InContainer(BP->GeneratedClass->GetDefaultObject()) == TEXT("captain"));
+
+        const FString SavedRevision = Revision(Filename);
+        const FJson Incompatible = Json(TEXT(R"({"action":"apply","operations":[
+            {"op":"change_variable_type","name":"Target","type":{"category":"object","path":"/Script/Engine.Actor"}}
+        ]})"));
+        Incompatible->SetStringField(TEXT("asset"), Asset);
+        Incompatible->SetStringField(TEXT("expected_revision"), SavedRevision);
+        const FJson Blocked = MakeShared<FJsonObject>();
+        bool Rejected = false;
+        AddExpectedErrorPlain(TEXT("BP_TypeChild.uasset: [Compiler]"), EAutomationExpectedErrorFlags::Contains, 0);
+        try { Execute(Incompatible, Blocked); }
+        catch (const FFailure& Failure)
+        {
+            Rejected = true;
+            TestTrue(TEXT("Rejection identifies the dependent Blueprint"), Failure.Message.Contains(TEXT("dependent Blueprints")));
+        }
+        TestTrue(TEXT("Incompatible dependent wiring blocks the save"), Rejected);
+        TestEqual(TEXT("Rejected edit preserves the file"), Revision(Filename), SavedRevision);
     }
     catch (const FFailure& Failure) { AddError(Failure.Message); }
     return true;
