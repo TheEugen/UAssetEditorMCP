@@ -32,7 +32,7 @@ def main():
     def request(value, success=True):
         result = client.execute(value)
         check(result["ok"] == success, json.dumps(result, indent=2))
-        check(result.get("protocol_version") == 2, "Install protocol 2 before running this suite")
+        check(result.get("protocol_version", 0) >= 2, "Install protocol 2 or later before running this suite")
         if success:
             check(not any(d["severity"] == "error" for d in result.get("diagnostics", [])), "Compiler errors: " + json.dumps(result))
         return result

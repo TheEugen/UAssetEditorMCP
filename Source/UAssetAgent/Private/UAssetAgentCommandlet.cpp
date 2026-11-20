@@ -1,5 +1,6 @@
 #include "UAssetAgentCommandlet.h"
 
+#include "Algo/Find.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Dom/JsonObject.h"
 #include "EdGraph/EdGraph.h"
@@ -11,6 +12,7 @@
 #include "Engine/InheritableComponentHandler.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
+#include "Engine/Texture.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/Actor.h"
 #include "HAL/FileManager.h"
@@ -33,6 +35,9 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceConstant.h"
+#include "MaterialShared.h"
 #include "Serialization/ArchiveReplaceObjectRef.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -1228,6 +1233,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 }
 
 #include "UAssetAgentMaintenance.inl"
+#include "UAssetAgentMaterials.inl"
 #include "UAssetAgentFunctionLibrary.inl"
 
 static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
@@ -1274,8 +1280,10 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 2);
+    Response->SetNumberField(TEXT("protocol_version"), 3);
     Response->SetBoolField(TEXT("saved"), false);
+    if (Action == TEXT("material_inspect") || Action == TEXT("material_apply"))
+    { MaterialInstanceAction(Request, Response, Action == TEXT("material_apply")); return; }
     if (Action == TEXT("delete_asset") || Action == TEXT("fixup_redirectors"))
     { Maintenance(Request, Response); return; }
     if (Request->HasField(TEXT("response_mode")) || Request->HasField(TEXT("graph")))
@@ -1532,6 +1540,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "UAssetAgentTests.inl"
+#include "UAssetAgentMaterialTests.inl"
 #include "UAssetAgentV2Tests.inl"
 #endif
 

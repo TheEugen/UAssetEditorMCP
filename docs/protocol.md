@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 2
+# UAsset Agent JSON protocol, version 3
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -649,6 +649,37 @@ a removed, retyped or purity-changing signature used by an external caller
 blocks the save. An additive signature change can proceed when all affected
 callers compile. Run these checks through the normal revision-guarded dry run
 and repeat the same batch to save.
+
+## Material instances (protocol 3)
+
+`blueprint_material_inspect` takes a saved Material Instance Constant package
+under `/Game`. It returns the parent object path, revision and effective scalar,
+vector, texture and static-switch values, each marked if overridden locally.
+Use `blueprint_material_apply` with that revision. The default is a dry run.
+
+```json
+{
+  "action":"material_apply",
+  "asset":"/Game/Ocean/MI_Water",
+  "expected_revision":"<revision>",
+  "dry_run":true,
+  "operations":[
+    {"op":"set_parent","parent":"/Game/Ocean/M_Water.M_Water"},
+    {"op":"set_parameter","name":"Speed","type":"scalar","value":0.6},
+    {"op":"set_parameter","name":"Tint","type":"vector","value":[0.1,0.2,0.4,1.0]},
+    {"op":"set_parameter","name":"Normal","type":"texture","value":"/Game/Ocean/T_Normal.T_Normal"},
+    {"op":"set_parameter","name":"Use Foam","type":"static_switch","value":true},
+    {"op":"clear_parameter","name":"Depth","type":"scalar"}
+  ]
+}
+```
+
+The selector defaults to `association: "global"`. For a material layer or
+blend, copy its `association` and zero-based `index` from inspection. Clearing
+one parameter restores its inherited value. Parent changes validate the
+inheritance chain. Apply validates the finished material using a synchronous
+SM5 shader compile and reports diagnostics in `shader_errors`. A successful
+save backs up the previous asset under `Saved/UAssetAgent/Backups`.
 
 ## Asset maintenance (protocol 2)
 
