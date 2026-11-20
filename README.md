@@ -168,8 +168,9 @@ in-flight tool cancellation is not currently implemented.
 
 `blueprint_compile({"path":"/Game"})` returns counts and only failing assets
 with diagnostics. A path can also identify a folder or one Blueprint package.
-Inspect/create/apply accept `response_mode: "summary"` or
-`response_mode: "graph", graph: "EventGraph"`; the default remains `full`.
+Inspect/create/apply accept summary or single-graph responses. Inspection can
+filter nodes by class, function, variable or referenced path. Apply can return
+a minimal response with diagnostics, aliases and save information.
 Reinstall/rebuild the native plugin and restart the MCP server when upgrading.
 
 Mutation operations use the existing revision, dry-run, compile and backup

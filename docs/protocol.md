@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 6
+# UAsset Agent JSON protocol, version 7
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -68,14 +68,28 @@ package; use the destination package path instead.
   `graph` with an exact name or object path from the summary. Omits variables,
   class defaults and other graphs. An absent or ambiguous graph is an error;
   use an object path to disambiguate nested graphs with identical names.
+- `minimal` (apply only) returns success/save status, diagnostics, created
+  aliases, the revision and any backup. A dry run returns the input revision.
+
+Set `include_components:false` in `summary` or `full` to omit the component
+list. For targeted inspection, pass `node_filter` with one or more of
+`class` (short node class name or full class path), `function` (call target
+name), `variable` (get/set member name), and `references_path` (Unreal path
+prefix found in a pin's type/default, member owner or serialized node asset).
+All supplied filters must match. A filtered response returns asset identity
+and matching nodes grouped by graph, including their links to other nodes.
+Set `response_mode:"graph"` and `graph` to search only one graph. Each graph
+reports its total and matching node counts.
 
 ```json
-{"action":"inspect","asset":"/Game/Characters/BP_Player","response_mode":"summary"}
+{"action":"inspect","asset":"/Game/Characters/BP_Player","response_mode":"summary","include_components":false}
 {"action":"inspect","asset":"/Game/Characters/BP_Player","response_mode":"graph","graph":"EventGraph"}
+{"action":"inspect","asset":"/Game/Ships/BP_Galleon","node_filter":{"class":"K2Node_VariableGet","references_path":"/Game/Waterline/"}}
+{"action":"apply","asset":"/Game/Ships/BP_Galleon","expected_revision":"<SHA-1>","dry_run":true,"response_mode":"minimal","operations":[]}
 ```
 
-Only the `blueprint` snapshot changes. Revisions, backup paths, diagnostics,
-node aliases and save/dry-run status retain their usual meaning. Graph selection
+Revisions, backup paths, diagnostics, node aliases and save/dry-run status
+retain their usual meaning. Graph selection
 is checked against the resulting Blueprint before any save, including for edits.
 Use `full` to read class defaults before changing them.
 

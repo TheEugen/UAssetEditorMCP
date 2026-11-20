@@ -41,17 +41,33 @@ def validate_request(request):
                 any(c in path for c in (".", "\\", ":")) or
                 any(not part for part in path.split("/")[1:])):
             raise AgentError("path must be a package or folder path under /Game without an extension")
+    mode = request.get("response_mode", "full")
     if "response_mode" in request or "graph" in request:
         if action not in {"inspect", "apply", "create"}:
             raise AgentError("response_mode and graph require inspect, apply or create")
-        mode = request.get("response_mode", "full")
-        if not isinstance(mode, str) or mode not in {"full", "summary", "graph"}:
-            raise AgentError("response_mode must be full, summary or graph")
+        modes = ("full", "summary", "graph", "minimal") if action == "apply" else ("full", "summary", "graph")
+        if not isinstance(mode, str) or mode not in modes:
+            raise AgentError("response_mode must be full, summary, graph or minimal (apply only)")
         if mode == "graph":
             if not isinstance(request.get("graph"), str) or not request["graph"].strip():
                 raise AgentError("response_mode graph requires a nonempty graph name or object path")
         elif "graph" in request:
             raise AgentError("graph requires response_mode graph")
+    if "node_filter" in request:
+        filters = request["node_filter"]
+        if action != "inspect" or mode == "summary":
+            raise AgentError("node_filter requires full or graph inspection")
+        if not isinstance(filters, dict) or not filters or any(
+                key not in {"class", "function", "variable", "references_path"} or
+                not isinstance(value, str) or not value.strip() for key, value in filters.items()):
+            raise AgentError("node_filter requires nonempty class, function, variable or references_path strings")
+        path = filters.get("references_path")
+        if path is not None and (not path.strip().startswith("/") or len(path.strip()) <= 1):
+            raise AgentError("references_path requires an Unreal path")
+    if "include_components" in request and (
+            action not in {"inspect", "apply", "create"} or mode not in ("summary", "full") or
+            not isinstance(request["include_components"], bool)):
+        raise AgentError("include_components must be a boolean and requires summary or full")
     if action in {"inspect", "components", "apply", "create", "delete_asset", "material_inspect", "material_apply", "level_inspect", "level_apply"}:
         asset = request.get("asset", "")
         if (not isinstance(asset, str) or not asset.startswith("/Game/") or
@@ -317,7 +333,8 @@ def tool_definitions():
     response_options = {
         "response_mode": {"type": "string", "enum": ["full", "summary", "graph"], "default": "full",
                           "description": "summary omits nodes, pins and class defaults; graph returns one graph. full preserves the complete snapshot."},
-        "graph": {"type": "string", "description": "Required with response_mode graph: exact graph name or object path from a summary."}}
+        "graph": {"type": "string", "description": "Required with response_mode graph: exact graph name or object path from a summary."},
+        "include_components": {"type": "boolean", "default": True, "description": "Set false to omit components from full or summary."}}
     definitions = []
     specs = [
         ("blueprint_list", "List Blueprint assets under /Game.", {"path": {"type": "string"}}, []),
@@ -371,6 +388,16 @@ def tool_definitions():
     for name, description, properties, required in specs:
         if name in {"blueprint_inspect", "blueprint_apply", "blueprint_create"}:
             properties.update(response_options)
+        if name == "blueprint_inspect":
+            properties["node_filter"] = {
+                "type": "object", "properties": {field: {"type": "string", "minLength": 1}
+                    for field in ("class", "function", "variable", "references_path")},
+                "minProperties": 1, "additionalProperties": False,
+                "description": "Return matching nodes only. Match exact node class, function, variable, or a referenced Unreal path. Multiple fields are ANDed."}
+        if name == "blueprint_apply":
+            properties["response_mode"] = {
+                "type": "string", "enum": ["full", "summary", "graph", "minimal"], "default": "full",
+                "description": "minimal returns diagnostics, aliases, revision and backup/save status without an asset snapshot."}
         definitions.append({"name": name, "description": description,
                             "inputSchema": {"type": "object", "properties": properties,
                                             "required": required, "additionalProperties": False}})

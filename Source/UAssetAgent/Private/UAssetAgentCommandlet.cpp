@@ -396,6 +396,12 @@ static FJson DescribeNode(UEdGraphNode* Node)
         J->SetStringField(TEXT("function"), Call->FunctionReference.GetMemberName().ToString());
         J->SetStringField(TEXT("function_class"), CallFunctionClass(Call));
     }
+    if (const UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
+    {
+        J->SetStringField(TEXT("variable"), Variable->GetVarName().ToString());
+        if (const UClass* Owner = Variable->VariableReference.GetMemberParentClass())
+        { J->SetStringField(TEXT("variable_class"), Owner->GetPathName()); }
+    }
     if (UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
     {
         J->SetStringField(TEXT("event"), Event->bOverrideFunction ? Event->EventReference.GetMemberName().ToString() : Event->CustomFunctionName.ToString());
@@ -457,15 +463,88 @@ static FJson DescribeFunction(const UFunction* Function)
     return Description;
 }
 
+struct FNodeFilter
+{
+    FString Class;
+    FString Function;
+    FString Variable;
+    FString ReferencesPath;
+
+    explicit FNodeFilter(const FJson& Json)
+    {
+        Require(!Json->Values.IsEmpty(), TEXT("node_filter requires at least one filter"));
+        for (const auto& Field : Json->Values)
+        {
+            FString Value = String(Json, *Field.Key).TrimStartAndEnd();
+            Require(!Value.IsEmpty(), TEXT("node_filter values must be nonempty"));
+            if (Field.Key == TEXT("class")) { Class = MoveTemp(Value); }
+            else if (Field.Key == TEXT("function")) { Function = MoveTemp(Value); }
+            else if (Field.Key == TEXT("variable")) { Variable = MoveTemp(Value); }
+            else if (Field.Key == TEXT("references_path"))
+            {
+                Require(Value.StartsWith(TEXT("/")) && Value.Len() > 1, TEXT("references_path requires an Unreal path"));
+                Value.RemoveFromEnd(TEXT("/"));
+                ReferencesPath = MoveTemp(Value);
+            }
+            else { Require(false, TEXT("Unknown node_filter field: ") + Field.Key); }
+        }
+    }
+
+    bool MatchesPath(const FString& Source) const
+    {
+        const FString Path = FPackageName::ExportTextPathToObjectPath(Source);
+        if (Path.Equals(ReferencesPath, ESearchCase::IgnoreCase)) { return true; }
+        if (Path.Len() <= ReferencesPath.Len() || !Path.StartsWith(ReferencesPath)) { return false; }
+        const TCHAR Separator = Path[ReferencesPath.Len()];
+        return Separator == '/' || Separator == '.' || Separator == ':';
+    }
+
+    bool MatchesPath(const UObject* Source) const
+    {
+        return Source && MatchesPath(Source->GetPathName());
+    }
+
+    bool Matches(UEdGraphNode* Node) const
+    {
+        const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node);
+        const UK2Node_Variable* GetOrSet = Cast<UK2Node_Variable>(Node);
+        if (!Class.IsEmpty() && !Class.Equals(Node->GetClass()->GetName(), ESearchCase::IgnoreCase) &&
+            !Class.Equals(Node->GetClass()->GetPathName(), ESearchCase::IgnoreCase)) { return false; }
+        if (!Function.IsEmpty() && (!Call ||
+            !Function.Equals(Call->FunctionReference.GetMemberName().ToString(), ESearchCase::IgnoreCase))) { return false; }
+        if (!Variable.IsEmpty() && (!GetOrSet ||
+            !Variable.Equals(GetOrSet->GetVarName().ToString(), ESearchCase::IgnoreCase))) { return false; }
+        if (ReferencesPath.IsEmpty()) { return true; }
+        if (MatchesPath(Node->GetClass()) || (Call && MatchesPath(CallFunctionClass(Call))) ||
+            (GetOrSet && MatchesPath(GetOrSet->VariableReference.GetMemberParentClass()))) { return true; }
+        for (const UEdGraphPin* Pin : Node->Pins)
+        {
+            if (Pin && (MatchesPath(Pin->PinType.PinSubCategoryObject.Get()) ||
+                MatchesPath(Pin->PinType.PinValueType.TerminalSubCategoryObject.Get()) ||
+                MatchesPath(Pin->DefaultObject) || MatchesPath(Pin->DefaultValue))) { return true; }
+        }
+        TArray<UObject*> References;
+        FReferenceFinder Finder(References, nullptr, false, true, false, true);
+        Finder.FindReferences(Node);
+        return References.ContainsByPredicate([&](const UObject* Reference)
+        {
+            return Reference && (Reference->IsAsset() || Reference->GetPackage() != Node->GetPackage()) && MatchesPath(Reference);
+        });
+    }
+};
+
 static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
 {
     const FString Mode = String(Request, TEXT("response_mode"), TEXT("full"), false);
     const FString Selected = Mode == TEXT("graph") ? String(Request, TEXT("graph")) : FString();
+    TOptional<FNodeFilter> Filter;
+    if (Request->HasField(TEXT("node_filter"))) { Filter.Emplace(Object(Request, TEXT("node_filter"))); }
+    const bool Metadata = Mode != TEXT("graph") && !Filter.IsSet();
     FJson J = MakeShared<FJsonObject>();
     J->SetStringField(TEXT("asset"), BP->GetOutermost()->GetName());
     J->SetStringField(TEXT("parent_class"), BP->ParentClass ? BP->ParentClass->GetPathName() : FString());
     J->SetStringField(TEXT("kind"), BlueprintKind(BP));
-    if (BP->BlueprintType == BPTYPE_FunctionLibrary && BP->GeneratedClass)
+    if (BP->BlueprintType == BPTYPE_FunctionLibrary && BP->GeneratedClass && !Filter.IsSet())
     {
         J->SetStringField(TEXT("generated_class"), BP->GeneratedClass->GetPathName());
         TArray<TSharedPtr<FJsonValue>> Functions;
@@ -483,8 +562,8 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
         J->SetBoolField(TEXT("template"), Anim->bIsTemplate);
     }
     if (UWidgetBlueprint* Widget = Cast<UWidgetBlueprint>(BP))
-    { if (Mode != TEXT("graph")) { DescribeWidgetBlueprint(Widget, J, Mode == TEXT("full")); } }
-    if (Mode != TEXT("graph"))
+    { if (Metadata) { DescribeWidgetBlueprint(Widget, J, Mode == TEXT("full")); } }
+    if (Metadata)
     {
         TArray<TSharedPtr<FJsonValue>> Variables;
         for (const FBPVariableDescription& V : BP->NewVariables)
@@ -517,7 +596,10 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
         {
             if (!Node) { continue; }
             ++NodeCount;
-            if (Mode != TEXT("summary")) { Nodes.Add(JsonValue(DescribeNode(Node))); }
+            if (Mode != TEXT("summary"))
+            {
+                if (!Filter.IsSet() || Filter->Matches(Node)) { Nodes.Add(JsonValue(DescribeNode(Node))); }
+            }
             else if (UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
             {
                 FJson E = MakeShared<FJsonObject>();
@@ -529,7 +611,9 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
                 Events.Add(JsonValue(E));
             }
         }
+        if (Filter.IsSet() && Mode != TEXT("graph") && Nodes.IsEmpty()) { continue; }
         G->SetNumberField(TEXT("node_count"), NodeCount);
+        if (Filter.IsSet()) { G->SetNumberField(TEXT("matched_node_count"), Nodes.Num()); }
         if (Mode == TEXT("summary")) { G->SetArrayField(TEXT("events"), Events); }
         else { G->SetArrayField(TEXT("nodes"), Nodes); }
         GraphValues.Add(JsonValue(G));
@@ -540,8 +624,9 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
         Require(GraphValues.Num() == 1, TEXT("Ambiguous graph name; use its object path: ") + Selected);
     }
     J->SetArrayField(TEXT("graphs"), GraphValues);
-    if (Mode != TEXT("graph")) { J->SetArrayField(TEXT("components"), DescribeComponents(BP, Mode == TEXT("full"))); }
-    if (Mode != TEXT("full")) { return J; }
+    if (Metadata && Boolean(Request, TEXT("include_components"), true))
+    { J->SetArrayField(TEXT("components"), DescribeComponents(BP, Mode == TEXT("full"))); }
+    if (Mode != TEXT("full") || !Metadata) { return J; }
     FJson Defaults = MakeShared<FJsonObject>();
     if (BP->GeneratedClass)
     {
@@ -1291,7 +1376,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 6);
+    Response->SetNumberField(TEXT("protocol_version"), 7);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("replace_references")) { ReplaceReferencesAction(Request, Response); return; }
     if (Action == TEXT("references") || Action == TEXT("find_path"))
@@ -1302,13 +1387,23 @@ static void Execute(const FJson& Request, const FJson& Response)
     { MaterialInstanceAction(Request, Response, Action == TEXT("material_apply")); return; }
     if (Action == TEXT("delete_asset") || Action == TEXT("fixup_redirectors"))
     { Maintenance(Request, Response); return; }
+    const FString Mode = String(Request, TEXT("response_mode"), TEXT("full"), false);
+    const bool Minimal = Mode == TEXT("minimal");
     if (Request->HasField(TEXT("response_mode")) || Request->HasField(TEXT("graph")))
     {
         Require(Action == TEXT("inspect") || Action == TEXT("apply") || Action == TEXT("create"), TEXT("response_mode and graph require inspect, apply or create"));
-        const FString Mode = String(Request, TEXT("response_mode"), TEXT("full"), false);
-        Require(Mode == TEXT("full") || Mode == TEXT("summary") || Mode == TEXT("graph"), TEXT("response_mode must be full, summary or graph"));
+        Require(Mode == TEXT("full") || Mode == TEXT("summary") || Mode == TEXT("graph") ||
+            (Minimal && Action == TEXT("apply")), TEXT("response_mode must be full, summary, graph or minimal (apply only)"));
         if (Mode == TEXT("graph")) { Require(!String(Request, TEXT("graph")).TrimStartAndEnd().IsEmpty(), TEXT("graph must not be empty")); }
         else { Require(!Request->HasField(TEXT("graph")), TEXT("graph requires response_mode graph")); }
+    }
+    if (Request->HasField(TEXT("node_filter")))
+    { Require(Action == TEXT("inspect") && Mode != TEXT("summary"), TEXT("node_filter requires full or graph inspection")); }
+    if (Request->HasField(TEXT("include_components")))
+    {
+        Require((Action == TEXT("inspect") || Action == TEXT("apply") || Action == TEXT("create")) &&
+            (Mode == TEXT("summary") || Mode == TEXT("full")), TEXT("include_components requires summary or full"));
+        Boolean(Request, TEXT("include_components"));
     }
     if (Action == TEXT("compile"))
     {
@@ -1525,9 +1620,13 @@ static void Execute(const FJson& Request, const FJson& Response)
     Response->SetObjectField(TEXT("node_ids"), Aliases);
     FJson WidgetAliases = MakeShared<FJsonObject>();
     for (const auto& Pair : Editor.WidgetAliases) { WidgetAliases->SetStringField(Pair.Key, Pair.Value.ToString()); }
-    Response->SetObjectField(TEXT("widget_ids"), WidgetAliases);
-    Response->SetObjectField(TEXT("blueprint"), DescribeBlueprint(BP, Request));
-    Response->SetStringField(TEXT("previous_revision"), Before);
+    if (!Minimal || !Editor.WidgetAliases.IsEmpty()) { Response->SetObjectField(TEXT("widget_ids"), WidgetAliases); }
+    if (Minimal) { Response->SetStringField(TEXT("revision"), Before); }
+    else
+    {
+        Response->SetObjectField(TEXT("blueprint"), DescribeBlueprint(BP, Request));
+        Response->SetStringField(TEXT("previous_revision"), Before);
+    }
     bool DryRun = Boolean(Request, TEXT("dry_run"));
     Response->SetBoolField(TEXT("dry_run"), DryRun);
     if (DryRun) { return; }
@@ -1560,6 +1659,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 #include "UAssetAgentLevelTests.inl"
 #include "UAssetAgentReferenceTests.inl"
 #include "UAssetAgentReplaceReferenceTests.inl"
+#include "UAssetAgentCompactTests.inl"
 #include "UAssetAgentV2Tests.inl"
 #endif
 
