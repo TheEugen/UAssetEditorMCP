@@ -27,8 +27,12 @@ struct FFixtures
         FJson Request = Json(TEXT("{\"action\":\"create\",\"operations\":[],\"response_mode\":\"summary\"}"));
         Request->SetStringField(TEXT("asset"), Root + TEXT("/") + Name);
         Request->SetStringField(TEXT("kind"), Kind);
-        Request->SetStringField(TEXT("parent_class"), Kind == TEXT("animation") ? TEXT("/Script/Engine.AnimInstance") : TEXT("/Script/UMG.UserWidget"));
-        Request->SetBoolField(TEXT("template"), true);
+        if (Kind == TEXT("animation"))
+        {
+            Request->SetStringField(TEXT("parent_class"), TEXT("/Script/Engine.AnimInstance"));
+            Request->SetBoolField(TEXT("template"), true);
+        }
+        if (Kind == TEXT("widget")) { Request->SetStringField(TEXT("parent_class"), TEXT("/Script/UMG.UserWidget")); }
         Execute(Request, MakeShared<FJsonObject>());
         return CastChecked<UBlueprint>(LoadExactAsset(Root + TEXT("/") + Name));
     }
@@ -52,6 +56,90 @@ static FJson AnimOp(const TCHAR* Kind, UEdGraphNode* Node)
     Op->SetStringField(TEXT("node"), Guid(Node->NodeGuid));
     return Op;
 }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAssetAgentRetargetCallTest, "UAssetAgent.V2.RetargetCall",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUAssetAgentRetargetCallTest::RunTest(const FString& Parameters)
+{
+    using namespace UAssetAgentV2Tests;
+    FFixtures Fixtures;
+    try
+    {
+        UBlueprint* Original = Fixtures.Create(TEXT("BFL_Original"), TEXT("function_library"));
+        UBlueprint* Replacement = Fixtures.Create(TEXT("BFL_Replacement"), TEXT("function_library"));
+        FEditor OriginalEditor(Original, MakeShared<FJsonObject>());
+        OriginalEditor.Apply(Json(TEXT(R"json({"op":"add_function","name":"Read","inputs":[
+            {"name":"Amount","type":{"category":"int"}},{"name":"Adjust","type":{"category":"int"}}],
+            "outputs":[{"name":"Value","type":{"category":"int"}}]})json")));
+        OriginalEditor.Apply(Json(TEXT(R"json({"op":"add_function","name":"PureRead","pure":true})json")));
+        Finish(OriginalEditor);
+        FEditor ReplacementEditor(Replacement, MakeShared<FJsonObject>());
+        ReplacementEditor.Apply(Json(TEXT(R"json({"op":"add_function","name":"NewRead","inputs":[
+            {"name":"Quantity","type":{"category":"int"}},{"name":"Offset","type":{"category":"int"}}],
+            "outputs":[{"name":"Result","type":{"category":"int"}}]})json")));
+        Finish(ReplacementEditor);
+
+        UBlueprint* Caller = Fixtures.Create(TEXT("BP_Caller"), TEXT("normal"));
+        FEditor CallerEditor(Caller, MakeShared<FJsonObject>());
+        CallerEditor.Apply(Json(TEXT(R"json({"op":"add_function","name":"ReadCaller","entry_id":"entry","result_id":"out",
+            "inputs":[{"name":"Incoming","type":{"category":"int"}}],"outputs":[{"name":"Outgoing","type":{"category":"int"}}]})json")));
+        FJson Add = Json(TEXT(R"json({"op":"add_node","kind":"call","graph":"ReadCaller","function":"Read","id":"call",
+            "x":200,"y":75,"comment":"Keep this layout"})json"));
+        Add->SetStringField(TEXT("class"), Original->GeneratedClass->GetPathName());
+        CallerEditor.Apply(Add);
+        for (const TCHAR* Operation : {
+            TEXT(R"json({"op":"connect","graph":"ReadCaller","from":{"node":"entry","pin":"Incoming"},"to":{"node":"call","pin":"Amount"}})json"),
+            TEXT(R"json({"op":"connect","graph":"ReadCaller","from":{"node":"call","pin":"Value"},"to":{"node":"out","pin":"Outgoing"}})json"),
+            TEXT(R"json({"op":"connect","graph":"ReadCaller","from":{"node":"entry","pin":"then"},"to":{"node":"call","pin":"execute"},"replace":true})json"),
+            TEXT(R"json({"op":"connect","graph":"ReadCaller","from":{"node":"call","pin":"then"},"to":{"node":"out","pin":"execute"}})json"),
+            TEXT(R"json({"op":"set_pin_default","graph":"ReadCaller","node":"call","pin":"Adjust","value":27})json")})
+        { CallerEditor.Apply(Json(Operation)); }
+        Finish(CallerEditor);
+
+        UEdGraph* Graph = CallerEditor.Graph(Json(TEXT(R"json({"graph":"ReadCaller"})json")));
+        UK2Node_CallFunction* Call = CastChecked<UK2Node_CallFunction>(CallerEditor.Node(Graph, TEXT("call")));
+        const FGuid Id = Call->NodeGuid;
+        const FString Filename = AssetFilename(Caller->GetOutermost()->GetName());
+        FJson Request = Json(TEXT(R"json({"action":"apply","response_mode":"summary","operations":[]})json"));
+        Request->SetStringField(TEXT("asset"), Caller->GetOutermost()->GetName());
+        Request->SetStringField(TEXT("expected_revision"), Revision(Filename));
+        FJson Retarget = Json(TEXT(R"json({"op":"retarget_call","graph":"ReadCaller","function":"NewRead",
+            "pin_map":{"Amount":"Quantity","Value":"Result"}})json"));
+        Retarget->SetStringField(TEXT("node"), Guid(Id));
+        Retarget->SetStringField(TEXT("class"), Replacement->GeneratedClass->GetPathName());
+        Object(Retarget, TEXT("pin_map"))->SetStringField(Guid(Call->FindPinChecked(TEXT("Adjust"))->PinId), TEXT("Offset"));
+        Request->SetArrayField(TEXT("operations"), {JsonValue(Retarget)});
+        const FJson Result = MakeShared<FJsonObject>();
+        Execute(Request, Result);
+        TestTrue(TEXT("Retargeted graph saves"), Result->GetBoolField(TEXT("saved")));
+        TestEqual(TEXT("Retarget keeps the same node"), CallerEditor.Node(Graph, TEXT("call")), static_cast<UEdGraphNode*>(Call));
+        TestEqual(TEXT("Retarget keeps the GUID"), Call->NodeGuid, Id);
+        TestTrue(TEXT("Retarget keeps position and comment"), Call->NodePosX == 200 && Call->NodePosY == 75 && Call->NodeComment == TEXT("Keep this layout"));
+        const FJson NodeInfo = DescribeNode(Call);
+        TestEqual(TEXT("Inspection reports the new library class"), String(NodeInfo, TEXT("function_class")), Replacement->GeneratedClass->GetPathName());
+        TestEqual(TEXT("Inspection reports the new function"), String(NodeInfo, TEXT("function")), FString(TEXT("NewRead")));
+        for (const TCHAR* Pin : {TEXT("Quantity"), TEXT("Result"), TEXT("execute"), TEXT("then")})
+        { TestTrue(Pin, !Call->FindPinChecked(Pin)->LinkedTo.IsEmpty()); }
+        TestEqual(TEXT("Literal moves with its mapped pin"), Call->FindPinChecked(TEXT("Offset"))->DefaultValue, FString(TEXT("27")));
+
+        const FString RevisionBeforeReject = Revision(Filename);
+        Request->SetStringField(TEXT("expected_revision"), RevisionBeforeReject);
+        Retarget->SetStringField(TEXT("class"), Original->GeneratedClass->GetPathName());
+        Retarget->SetStringField(TEXT("function"), TEXT("PureRead"));
+        Retarget->RemoveField(TEXT("pin_map"));
+        bool Rejected = false;
+        try { Execute(Request, MakeShared<FJsonObject>()); }
+        catch (const FFailure& Failure)
+        {
+            Rejected = true;
+            TestTrue(TEXT("Rejection identifies the missing pin"), Failure.Message.Contains(TEXT("Replacement pin missing")));
+        }
+        TestTrue(TEXT("Retarget with missing linked pins fails"), Rejected);
+        TestEqual(TEXT("Rejected retarget does not save"), Revision(Filename), RevisionBeforeReject);
+    }
+    catch (const FFailure& Failure) { AddError(Failure.Message); }
+    return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAssetAgentV2AnimationTest, "UAssetAgent.V2.Animation",

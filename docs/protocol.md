@@ -383,6 +383,35 @@ are not rewritten; use the batch compile action to detect required caller
 changes. To remove the unused multicast entirely, use the existing `delete_node`
 operation instead. Run the usual dry-run/apply workflow for all these operations.
 
+### Retargeting function calls
+
+`retarget_call` changes the function called by an ordinary K2 call node in
+place. It preserves the node GUID, position and comment. Select the node by its
+GUID from graph inspection or use a batch alias. Graph inspection includes the
+call's `function` and `function_class`. Use the generated `_C` class path for
+a Blueprint Function Library.
+
+```json
+{
+  "op": "retarget_call",
+  "graph": "ReadOceanTime",
+  "node": "<call-node-guid>",
+  "class": "/Game/Ocean/BFL_Ocean.BFL_Ocean_C",
+  "function": "ReadTime",
+  "pin_map": {"OldOcean": "Ocean", "Time": "Result"}
+}
+```
+
+Omit `class` to keep the current class or use `"self"` for a function in the
+calling Blueprint or its parents. The commandlet matches compatible pins by
+name and direction. Use `pin_map` for renamed pins, with old names or pin GUIDs
+as keys and new pin names as values. Linked pins and edited input defaults must
+have a compatible destination. New and unused pins take the replacement
+function's defaults. Missing pins, incompatible wires and invalid defaults
+fail the batch without saving. Disconnect obsolete links earlier in the same
+batch when the replacement signature requires it. Specialized nodes such as
+interface messages and parent calls use their own node types.
+
 ## Connections, defaults and layout
 
 ```json
@@ -570,7 +599,7 @@ the tree; summary omits widget/slot defaults and all node/pin lists.
 Use `kind: "function_library"` with `blueprint_create`. The parent defaults to
 `/Script/Engine.BlueprintFunctionLibrary`. Library graphs can contain static
 functions and local graph logic. The supported operations are `add_function`,
-`edit_function`, `delete_function`, `add_node` (call, branch, sequence and reroute),
+`edit_function`, `delete_function`, `add_node` (call, branch, sequence and reroute), `retarget_call`,
 `connect`, `disconnect`, `set_pin_default`, `move_node` and `delete_node`.
 
 ```json

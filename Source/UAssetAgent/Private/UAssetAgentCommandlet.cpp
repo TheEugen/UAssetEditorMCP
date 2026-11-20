@@ -356,6 +356,13 @@ static FJson DescribeType(const FEdGraphPinType& Type)
 
 #include "UAssetAgentV2Inspect.inl"
 
+static FString CallFunctionClass(const UK2Node_CallFunction* Call)
+{
+    if (Call->FunctionReference.IsSelfContext()) { return TEXT("self"); }
+    const UClass* Owner = Call->FunctionReference.GetMemberParentClass();
+    return Owner ? Owner->GetPathName() : FString();
+}
+
 static FJson DescribeNode(UEdGraphNode* Node)
 {
     FJson J = MakeShared<FJsonObject>();
@@ -374,6 +381,7 @@ static FJson DescribeNode(UEdGraphNode* Node)
     if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
     {
         J->SetStringField(TEXT("function"), Call->FunctionReference.GetMemberName().ToString());
+        J->SetStringField(TEXT("function_class"), CallFunctionClass(Call));
     }
     if (UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
     {
@@ -559,6 +567,7 @@ static bool Compile(UBlueprint* BP, const FJson& Response, EBlueprintCompileOpti
 }
 
 #include "UAssetAgentMemberTypes.inl"
+#include "UAssetAgentCallEdit.inl"
 
 class FEditor
 {
@@ -1044,14 +1053,9 @@ public:
             UK2Node* N = nullptr;
             if (Type == TEXT("call"))
             {
-                FString Owner = String(Op, TEXT("class"), TEXT("self"), false);
-                UClass* Class = Owner == TEXT("self") ? BP->SkeletonGeneratedClass.Get() : LoadObject<UClass>(nullptr, *Owner);
-                Require(Class != nullptr, TEXT("Function class not found"));
-                UFunction* Function = Class->FindFunctionByName(FName(*String(Op, TEXT("function"))));
-                Require(Function && Function->HasAnyFunctionFlags(FUNC_BlueprintCallable | FUNC_BlueprintPure), TEXT("Blueprint callable function not found"));
                 UK2Node_CallFunction* Call = NewObject<UK2Node_CallFunction>(G);
-                Call->SetFromFunction(Function);
-                if (Owner == TEXT("self")) { Call->FunctionReference.SetSelfMember(Function->GetFName()); }
+                const FString Owner = String(Op, TEXT("class"), TEXT("self"), false);
+                SetCallFunction(Call, Owner, ResolveCallFunction(BP, Owner, String(Op, TEXT("function"))));
                 N = Call;
             }
             else if (Type == TEXT("get") || Type == TEXT("set"))
@@ -1112,6 +1116,12 @@ public:
             if (UK2Node_CustomEvent* E = Cast<UK2Node_CustomEvent>(N)) { Parameters(E, Op, TEXT("inputs"), EGPD_Output); }
             Remember(Alias, N);
             FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+        }
+        else if (Kind == TEXT("retarget_call"))
+        {
+            UEdGraphNode* Existing = Node(G, String(Op, TEXT("node")));
+            Require(Existing->GetClass() == UK2Node_CallFunction::StaticClass(), TEXT("retarget_call requires an ordinary function call node"));
+            RetargetCall(BP, CastChecked<UK2Node_CallFunction>(Existing), Op, Schema);
         }
         else if (Kind == TEXT("connect") || Kind == TEXT("disconnect"))
         {

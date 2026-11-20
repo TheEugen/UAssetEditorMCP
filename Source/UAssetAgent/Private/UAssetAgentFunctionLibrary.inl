@@ -2,7 +2,7 @@ static void ValidateLibraryOperation(const FJson& Op)
 {
     const FString Kind = String(Op, TEXT("op"));
     Require(Kind == TEXT("add_function") || Kind == TEXT("edit_function") || Kind == TEXT("delete_function") ||
-        Kind == TEXT("add_node") || Kind == TEXT("connect") || Kind == TEXT("disconnect") ||
+        Kind == TEXT("add_node") || Kind == TEXT("retarget_call") || Kind == TEXT("connect") || Kind == TEXT("disconnect") ||
         Kind == TEXT("set_pin_default") || Kind == TEXT("move_node") || Kind == TEXT("delete_node"),
         TEXT("Operation is not supported in function libraries: ") + Kind);
     if (Kind == TEXT("add_node"))
