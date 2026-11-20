@@ -17,12 +17,7 @@ against Blueprint callers, deletes assets with referencer checks,
 and fixes redirectors in folders. See [the protocol](docs/protocol.md)
 for the precise supported subset.
 
-**Status:** v1 was built and exercised end to end in Lyra in the reported
-13 November session: list, inspect, function lookup, dry-run compilation,
-create/save, apply/save/backup and stale-revision rejection. The v2 source includes
-Python client tests, native automation cases, and commandlet persistence
-tests. The optional C++ API checker can verify engine imports as well as syntax.
-The Win64 plugin builds with the Unreal-Merge UE 5.4.4 checkout. Rebuild the
+The Win64 plugin has been built with UE 5.4.4. Rebuild the
 plugin before using the new requests and run the relevant integration suite in
 a disposable project.
 
@@ -45,7 +40,7 @@ Use `install --update` after changing the plugin sources, then rebuild.
 For a C++ project, build its Development Editor target (substitute its actual name):
 
 ```powershell
-& "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Build\BatchFiles\Build.bat" `
+& "C:\Example\UnrealEngine\Engine\Build\BatchFiles\Build.bat" `
   YourGameEditor Win64 Development `
   "-Project=D:\YourGame\YourGame.uproject" -WaitMutex -NoHotReloadFromIDE
 ```
@@ -54,7 +49,7 @@ For a Blueprint-only project, package the plugin first using Unreal's BuildPlugi
 command, then install the resulting plugin including its binaries:
 
 ```powershell
-.\build-plugin.ps1 -EngineRoot "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
+.\build-plugin.ps1 -EngineRoot "C:\Example\UnrealEngine"
 
 py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" install `
   --source .\build\UE5.4 --update
@@ -65,16 +60,16 @@ plugin is editor-only and is not included in your multiplayer game's runtime.
 The build script stages only plugin source, so Unreal cannot recursively copy
 the package output into its own build. It refuses to overwrite an earlier package.
 
-For the existing Lyra installation in `Plugins/UAssetEditor`, update that folder
+For an existing installation in `Plugins/UAssetEditor`, update that folder
 directly (the generic installer above uses a different folder name):
 
 ```powershell
-Copy-Item -LiteralPath 'F:\PP-GPT\UassetEditor\Source' `
-  -Destination 'F:\Unreal-Merge\Unreal\Lyra\Plugins\UAssetEditor' -Recurse -Force
-Copy-Item -LiteralPath 'F:\PP-GPT\UassetEditor\UAssetAgent.uplugin' `
-  -Destination 'F:\Unreal-Merge\Unreal\Lyra\Plugins\UAssetEditor\UAssetAgent.uplugin' -Force
-& 'F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Build\BatchFiles\Build.bat' `
-  LyraEditor Win64 Development '-Project=F:\Unreal-Merge\Unreal\Lyra\Lyra.uproject' `
+Copy-Item -LiteralPath 'C:\Example\UAssetAgent\Source' `
+  -Destination 'D:\YourGame\Plugins\UAssetEditor' -Recurse -Force
+Copy-Item -LiteralPath 'C:\Example\UAssetAgent\UAssetAgent.uplugin' `
+  -Destination 'D:\YourGame\Plugins\UAssetEditor\UAssetAgent.uplugin' -Force
+& 'C:\Example\UnrealEngine\Engine\Build\BatchFiles\Build.bat' `
+  YourGameEditor Win64 Development '-Project=D:\YourGame\YourGame.uproject' `
   -WaitMutex -NoHotReloadFromIDE
 ```
 
@@ -84,7 +79,7 @@ repository so `blueprint_protocol` serves the updated protocol text.
 ## Use from a coding agent or terminal
 
 ```powershell
-$env:UE_ENGINE_ROOT = "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
+$env:UE_ENGINE_ROOT = "C:\Example\UnrealEngine"
 
 py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" list
 
@@ -102,7 +97,7 @@ py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" --timeout 18
 
 # Inspect ship component defaults, or find broken redirectors:
 py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" components /Game/Ships/BP_Ship
-py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" redirectors --path /Game/Polynesien
+py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" redirectors --path /Game/Example
 
 # Validate and compile an example without saving an asset:
 py -3.9 .\uasset_agent.py --project "D:\YourGame\YourGame.uproject" run `
@@ -133,11 +128,11 @@ repeated startup costs. This version does not edit live inside an open editor.
 ## Connect an MCP-capable agent
 
 For **Codex CLI**, use [examples/codex-config.toml](examples/codex-config.toml),
-preconfigured for the Lyra paths above. Install it from your terminal:
+as a template. From the repository, pass your engine and project paths to the installer:
 
 ```powershell
-& 'F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Binaries\ThirdParty\Python3\Win64\python.exe' `
-  'F:\PP-GPT\UassetEditor\configure_codex.py'
+& 'C:\Example\UnrealEngine\Engine\Binaries\ThirdParty\Python3\Win64\python.exe' `
+  '.\configure_codex.py' --engine 'C:\Example\UnrealEngine' --project 'D:\YourGame\YourGame.uproject'
 codex mcp list
 ```
 
@@ -190,8 +185,8 @@ Suggested instruction for your coding agents:
 
 ```powershell
 py -3.9 -m unittest discover -s tests -p "test_*.py" -v
-py -3.9 tests/check_cpp_headers.py --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
-py -3.9 tests/check_cpp_headers.py --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release" --link
+py -3.9 tests/check_cpp_headers.py --engine "C:\Example\UnrealEngine"
+py -3.9 tests/check_cpp_headers.py --engine "C:\Example\UnrealEngine" --link
 ```
 
 The header check uses the installed MSVC and engine headers to check the native
@@ -206,7 +201,7 @@ After building/installing the plugin in the disposable `tests/Host` project:
 
 ```powershell
 py -3.9 tests/integration_unreal.py --project tests/Host/UAssetAgentHost.uproject `
-  --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
+  --engine "C:\Example\UnrealEngine"
 ```
 
 The integration check creates a unique folder of test assets and retains them
@@ -222,7 +217,7 @@ valid/broken/cyclic redirector chains.
 After installing the rebuilt plugin, run them in the disposable host project:
 
 ```powershell
-& "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+& "C:\Example\UnrealEngine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
   "$PWD\tests\Host\UAssetAgentHost.uproject" -unattended -NullRHI -nosound -nop4 `
   '-ExecCmds=Automation RunTests UAssetAgent' '-TestExit=Automation Test Queue Empty' `
   "-abslog=$PWD\tests\Host\Saved\UAssetAgentAutomation.log"
@@ -237,7 +232,7 @@ Run the new commandlet persistence suite after rebuilding the host plugin:
 
 ```powershell
 py -3.9 tests/integration_v2.py --project tests/Host/UAssetAgentHost.uproject `
-  --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
+  --engine "C:\Example\UnrealEngine"
 ```
 
 It runs dry runs and real saves, reloads in fresh processes, checks compact
@@ -251,12 +246,8 @@ same disposable host project:
 
 ```powershell
 py -3.9 tests/integration_function_library.py --project tests/Host/UAssetAgentHost.uproject `
-  --engine "F:\Unreal-Merge\Unreal\UnrealEngine-5.4.4-release"
+  --engine "C:\Example\UnrealEngine"
 ```
-
-The specific Lyra ABP_Wheel/sail/pump/capstan/cannon and HUD migrations still need
-acceptance runs on project copies after the Lyra plugin is rebuilt; these generic
-fixtures do not prove gameplay behavior or the project-specific native bindings.
 
 Existing assets are backed up under `Saved/UAssetAgent/Backups` before saving.
 Validation/compile failures do not save the asset. Crashes, timeouts, and save
@@ -267,8 +258,6 @@ the editor. Runs and backups are retained until you remove them.
 
 ## Editing scope
 
-The re-parenting operation addresses the requested capability for KAN-12 and
-KAN-36; project-specific migrations still need their own edit requests and checks.
 Component defaults support local SCS templates, inherited Blueprint overrides
 and native class default subobjects. Variable deletion rejects known references;
 event parameter edits preserve unchanged wiring and update local callers.
@@ -278,9 +267,7 @@ anim layers, editing Control Rig/IK Rig assets and authoring widget animations
 remain outside this version. Referenced widget rename/removal fails clearly;
 binding/animation/navigation reference rewriting is intentionally limited.
 
-The reported Lyra test asset `/Game/Polynesien/Debug/BP_AgentSmokeTest` remains
-a cleanup item in that project; `delete_asset` can now check references, back up
-and remove it. Maintenance actions default to dry runs. Multi-package redirector
+Maintenance actions default to dry runs. Multi-package redirector
 fixup can leave partial disk results on save failures; consult its backups/logs.
 
 ## Design references

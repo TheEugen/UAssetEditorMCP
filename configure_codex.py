@@ -3,6 +3,7 @@
 Run with UE 5.4's bundled Python 3.11 (no pip dependencies).
 """
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -52,10 +53,25 @@ def install(config, snippet):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="Destination config.toml; defaults to Codex's user config")
+    parser.add_argument("--engine", required=True, type=Path, help="Unreal Engine checkout or installation root")
+    parser.add_argument("--project", required=True, type=Path, help="Target .uproject file")
     args = parser.parse_args()
     config = args.config or Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
     try:
-        backup, changed = install(config, (ROOT / "examples/codex-config.toml").read_text(encoding="utf-8"))
+        engine = args.engine.resolve(strict=True)
+        project = args.project.resolve(strict=True)
+        python = (engine / "Engine/Binaries/ThirdParty/Python3/Win64/python.exe").resolve(strict=True)
+        if not project.is_file() or project.suffix.lower() != ".uproject":
+            raise ValueError("--project must identify a .uproject file")
+        snippet = (ROOT / "examples/codex-config.toml").read_text(encoding="utf-8")
+        for placeholder, path in {
+            "C:/Example/UnrealEngine/Engine/Binaries/ThirdParty/Python3/Win64/python.exe": python,
+            "C:/Example/UAssetAgent/uasset_agent.py": ROOT / "uasset_agent.py",
+            "D:/YourGame/YourGame.uproject": project,
+            "C:/Example/UnrealEngine": engine,
+        }.items():
+            snippet = snippet.replace(json.dumps(placeholder), json.dumps(path.as_posix(), ensure_ascii=False))
+        backup, changed = install(config, snippet)
     except (OSError, ValueError) as exc:
         parser.exit(1, f"Setup failed: {exc}\n")
     print(("Configured " if changed else "Already configured: ") + str(config))

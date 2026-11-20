@@ -152,7 +152,7 @@ class McpTests(unittest.TestCase):
                 requests.append(request)
                 return {"ok": True}
 
-        for action, args in [("components", {"asset": "/Game/Ship"}), ("redirectors", {"path": "/Game/Polynesien"})]:
+        for action, args in [("components", {"asset": "/Game/Ship"}), ("redirectors", {"path": "/Game/Example"})]:
             result = agent.dispatch_rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                          "params": {"name": "blueprint_" + action, "arguments": args}}, FakeClient())["result"]
             self.assertFalse(result["isError"])
@@ -160,8 +160,8 @@ class McpTests(unittest.TestCase):
         with patch.object(agent, "Client", return_value=FakeClient()), patch("sys.stdout", new_callable=io.StringIO):
             self.assertEqual(agent.main(["--project", "dummy", "components", "/Game/Ship"]), 0)
             self.assertEqual(requests[-1], {"action": "components", "asset": "/Game/Ship"})
-            self.assertEqual(agent.main(["--project", "dummy", "redirectors", "--path", "/Game/Polynesien"]), 0)
-            self.assertEqual(requests[-1], {"action": "redirectors", "path": "/Game/Polynesien"})
+            self.assertEqual(agent.main(["--project", "dummy", "redirectors", "--path", "/Game/Example"]), 0)
+            self.assertEqual(requests[-1], {"action": "redirectors", "path": "/Game/Example"})
         for request in [{"action": "components"}, {"action": "components", "asset": "/Game/Ship.uasset"},
                         {"action": "redirectors", "path": "/Game/../Ship"}]:
             with self.assertRaises(agent.AgentError):

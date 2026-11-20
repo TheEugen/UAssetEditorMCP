@@ -33,7 +33,7 @@ compile verifies graph validity, not gameplay or multiplayer correctness.
 ### Redirectors
 
 ```json
-{"action":"redirectors","path":"/Game/Polynesien"}
+{"action":"redirectors","path":"/Game/Example"}
 ```
 
 Returns `redirectors` separately from the Blueprint-only `list` action. `path`
@@ -84,7 +84,7 @@ reports its total and matching node counts.
 ```json
 {"action":"inspect","asset":"/Game/Characters/BP_Player","response_mode":"summary","include_components":false}
 {"action":"inspect","asset":"/Game/Characters/BP_Player","response_mode":"graph","graph":"EventGraph"}
-{"action":"inspect","asset":"/Game/Ships/BP_Galleon","node_filter":{"class":"K2Node_VariableGet","references_path":"/Game/Waterline/"}}
+{"action":"inspect","asset":"/Game/Ships/BP_Galleon","node_filter":{"class":"K2Node_VariableGet","references_path":"/Game/Ocean/"}}
 {"action":"apply","asset":"/Game/Ships/BP_Galleon","expected_revision":"<SHA-1>","dry_run":true,"response_mode":"minimal","operations":[]}
 ```
 
@@ -494,7 +494,7 @@ events and custom events, subject to the node's normal deletion rules.
 The following operations can be combined in one `apply` batch:
 
 ```json
-{"op":"reparent","parent_class":"/Script/LyraGame.PP_WheelAnimInstance"}
+{"op":"reparent","parent_class":"/Script/YourGame.WheelAnimInstance"}
 {"op":"delete_variable","name":"WheelRotation","retarget_references":true}
 {"op":"delete_function","name":"OldUpdateWheel"}
 {"op":"set_anim_node_function","graph":"AnimGraph","node":"<guid>","slot":"UpdateFunction","function":"NativeUpdateWheel"}
@@ -756,8 +756,8 @@ can include external actors and report their physical package paths in
 `source_packages`.
 
 ```json
-{"action":"references","asset":"/Game/Waterline/BP_Ocean_Time","direction":"referencers","recursive":true,"include_soft":false}
-{"action":"find_path","path_prefix":"/Game/Waterline/","folder":"/Game/Maps"}
+{"action":"references","asset":"/Game/Ocean/BP_Ocean_Time","direction":"referencers","recursive":true,"include_soft":false}
+{"action":"find_path","path_prefix":"/Game/Ocean/","folder":"/Game/Maps"}
 ```
 
 Both actions use Asset Registry package metadata, including dependencies
@@ -778,8 +778,8 @@ compatible. Incompatible or missing members abort the edit.
 ```json
 {
   "action":"replace_references",
-  "from":"/Game/Waterline60/BP_Ocean",
-  "to":"/Game/Waterline62/BP_Ocean",
+  "from":"/Game/Ocean60/BP_Ocean",
+  "to":"/Game/Ocean62/BP_Ocean",
   "scope":["/Game/Ships/BP_Galleon","/Game/Ships/Shared"],
   "exclude_maps":true,
   "dry_run":true
@@ -806,8 +806,8 @@ These are independent actions, not `apply` operations. They default to
 ```json
 {"action":"delete_asset","asset":"/Game/Unused/BP_Test","dry_run":true,"force":false}
 {"action":"delete_asset","asset":"/Game/Unused/BP_Test","expected_revision":"<40-character SHA-1>","dry_run":false,"force":false}
-{"action":"fixup_redirectors","path":"/Game/Polynesien","dry_run":true}
-{"action":"fixup_redirectors","path":"/Game/Polynesien","expected_revisions":{"/Game/Polynesien/OldName":"<SHA-1>","/Game/Polynesien/ReferencingBP":"<SHA-1>"},"dry_run":false}
+{"action":"fixup_redirectors","path":"/Game/Example","dry_run":true}
+{"action":"fixup_redirectors","path":"/Game/Example","expected_revisions":{"/Game/Example/OldName":"<SHA-1>","/Game/Example/ReferencingBP":"<SHA-1>"},"dry_run":false}
 ```
 
 Deletion returns `revision` and registry `referencers`; reference conflicts fail

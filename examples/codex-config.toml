@@ -1,12 +1,12 @@
 # Merge this table into your Codex config.toml. Do not replace the whole file.
 # Uses UE's bundled Python 3.11, avoiding Windows Store Python aliases.
 [mcp_servers.unreal-blueprints]
-command = "F:/Unreal-Merge/Unreal/UnrealEngine-5.4.4-release/Engine/Binaries/ThirdParty/Python3/Win64/python.exe"
+command = "C:/Example/UnrealEngine/Engine/Binaries/ThirdParty/Python3/Win64/python.exe"
 args = [
   "-u",
-  "F:/PP-GPT/UassetEditor/uasset_agent.py",
-  "--project", "F:/Unreal-Merge/Unreal/Lyra/Lyra.uproject",
-  "--engine", "F:/Unreal-Merge/Unreal/UnrealEngine-5.4.4-release",
+  "C:/Example/UAssetAgent/uasset_agent.py",
+  "--project", "D:/YourGame/YourGame.uproject",
+  "--engine", "C:/Example/UnrealEngine",
   "--timeout", "1800",
   "mcp",
 ]

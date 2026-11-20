@@ -3,9 +3,9 @@
     "unreal-blueprints": {
       "command": "python",
       "args": [
-        "F:/PP-GPT/UassetEditor/uasset_agent.py",
+        "C:/Example/UAssetAgent/uasset_agent.py",
         "--project", "D:/YourGame/YourGame.uproject",
-        "--engine", "F:/Unreal-Merge/Unreal/UnrealEngine-5.4.4-release",
+        "--engine", "C:/Example/UnrealEngine",
         "mcp"
       ],
       "env": {"PYTHONUTF8": "1"}

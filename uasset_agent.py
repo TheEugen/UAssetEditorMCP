@@ -353,7 +353,7 @@ def tool_definitions():
             "asset": asset, "direction": {"type": "string", "enum": ["referencers", "dependencies"], "default": "referencers"},
             "recursive": {"type": "boolean", "default": False}, "include_soft": {"type": "boolean", "default": True}}, ["asset"]),
         ("blueprint_find_path", "Find packages under a folder with a reference into a package path prefix. Includes map imports and World Partition actors.", {
-            "path_prefix": {"type": "string", "description": "Target package or folder, e.g. /Game/Waterline."},
+            "path_prefix": {"type": "string", "description": "Target package or folder, e.g. /Game/Ocean."},
             "folder": {"type": "string", "default": "/Game", "description": "Source folder to search recursively."},
             "include_soft": {"type": "boolean", "default": True}}, ["path_prefix"]),
         ("blueprint_replace_references", "Replace references to one asset within selected packages or folders. Dry run previews edits and Blueprint compile diagnostics. Saves require the preview's revisions.", {
