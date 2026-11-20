@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 3
+# UAsset Agent JSON protocol, version 4
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -680,6 +680,51 @@ one parameter restores its inherited value. Parent changes validate the
 inheritance chain. Apply validates the finished material using a synchronous
 SM5 shader compile and reports diagnostics in `shader_errors`. A successful
 save backs up the previous asset under `Saved/UAssetAgent/Backups`.
+
+## Placed actors (protocol 4)
+
+Use `blueprint_level_inspect` with the map's package path. The optional `search`
+matches actor names, labels, class paths and GUIDs. Each actor includes its
+package, transform, tags, edited instance properties and referenced assets.
+The revision covers the map and its external actor files. Inspect individual
+streamed sublevel assets with their own package paths.
+
+```json
+{"action":"level_inspect","asset":"/Game/Maps/Harbor","search":"Ocean"}
+```
+
+Use `blueprint_level_apply` with the returned revision. Actor selectors accept
+a GUID, exact object name, or unique label. Use a GUID to resolve ambiguity.
+Property values use Unreal property text and dot paths traverse struct fields.
+Transforms specify location in centimeters, rotation in pitch/yaw/roll
+degrees and scale as three numbers each.
+
+```json
+{
+  "action":"level_apply",
+  "asset":"/Game/Maps/Harbor",
+  "expected_revision":"<40-character SHA-1>",
+  "dry_run":true,
+  "operations":[
+    {"op":"replace_actor_class","actor":"BP_Ocean_Time_0","class":"/Game/Ocean/BP_Ocean_Time.BP_Ocean_Time_C"},
+    {"op":"set_actor_property","actor":"BuoyancySolver","property":"BuoyancyDataset","value":"/Game/Ocean/DA_Buoyancy.DA_Buoyancy"},
+    {"op":"spawn_actor","class":"/Script/Engine.TargetPoint","name":"DockTarget","transform":{"location":[100,200,300],"rotation":[0,90,0],"scale":[1,1,1]}},
+    {"op":"set_tags","actor":"DockTarget","tags":["Dock","Spawn"]},
+    {"op":"delete_actor","actor":"OldTarget"}
+  ]
+}
+```
+
+Replacement keeps the actor name, GUID, transform, tags and same-type
+editable property overrides. The result identifies copied and skipped overrides.
+The tool checks loaded references for incompatible actor types and compiles
+the new Blueprint class and any modified level script. Dry runs are the
+default. A save backs up changed existing packages under
+`Saved/UAssetAgent/Backups` and reports `changed_packages` and the new revision.
+World Partition actors are saved in their external actor packages. The tool
+attempts disk rollback from the backups on write failure and reports any
+unrestored packages in `rollback_failures`. External actor files must be
+in the map's external actor directory.
 
 ## Asset maintenance (protocol 2)
 

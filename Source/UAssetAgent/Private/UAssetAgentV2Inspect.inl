@@ -92,7 +92,7 @@ static void DescribeWidgetBlueprint(UWidgetBlueprint* BP, const FJson& J, bool F
 }
 
 // Dot paths traverse structs only, never arbitrary UObject references.
-static void SetNestedDefault(UObject* Object, const FString& Path, const FString& Value)
+static void SetNestedDefault(UObject* Object, const FString& Path, const FString& Value, bool Instance = false)
 {
     TArray<FString> Parts;
     Path.ParseIntoArray(Parts, TEXT("."), false);
@@ -105,8 +105,9 @@ static void SetNestedDefault(UObject* Object, const FString& Path, const FString
     {
         Require(!Parts[I].IsEmpty(), TEXT("Invalid property path"));
         Property = FindFProperty<FProperty>(Type, FName(*Parts[I]));
+        const EPropertyFlags EditScope = Instance ? CPF_DisableEditOnInstance : CPF_DisableEditOnTemplate;
         Require(Property && Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible) &&
-            !Property->HasAnyPropertyFlags(CPF_Transient | CPF_EditConst | CPF_DisableEditOnTemplate), TEXT("Editable property not found: ") + Path);
+            !Property->HasAnyPropertyFlags(CPF_Transient | CPF_EditConst | EditScope), TEXT("Editable property not found: ") + Path);
         if (!Top) { Top = Property; }
         if (I + 1 < Parts.Num())
         {

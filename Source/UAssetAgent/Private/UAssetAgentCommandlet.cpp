@@ -6,9 +6,16 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraphSchema_K2.h"
+#include "EditorWorldUtils.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/Engine.h"
+#include "Engine/Level.h"
+#include "Engine/LevelScriptBlueprint.h"
+#include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
+#include "WorldPartition/WorldPartitionActorDescInstance.h"
+#include "WorldPartition/WorldPartitionHelpers.h"
 #include "Engine/InheritableComponentHandler.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -1234,6 +1241,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 
 #include "UAssetAgentMaintenance.inl"
 #include "UAssetAgentMaterials.inl"
+#include "UAssetAgentLevels.inl"
 #include "UAssetAgentFunctionLibrary.inl"
 
 static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
@@ -1280,8 +1288,10 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 3);
+    Response->SetNumberField(TEXT("protocol_version"), 4);
     Response->SetBoolField(TEXT("saved"), false);
+    if (Action == TEXT("level_inspect") || Action == TEXT("level_apply"))
+    { LevelAction(Request, Response, Action == TEXT("level_apply")); return; }
     if (Action == TEXT("material_inspect") || Action == TEXT("material_apply"))
     { MaterialInstanceAction(Request, Response, Action == TEXT("material_apply")); return; }
     if (Action == TEXT("delete_asset") || Action == TEXT("fixup_redirectors"))
@@ -1541,6 +1551,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 #if WITH_DEV_AUTOMATION_TESTS
 #include "UAssetAgentTests.inl"
 #include "UAssetAgentMaterialTests.inl"
+#include "UAssetAgentLevelTests.inl"
 #include "UAssetAgentV2Tests.inl"
 #endif
 
