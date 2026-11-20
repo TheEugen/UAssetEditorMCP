@@ -115,6 +115,7 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(agent.AgentError):
                 agent.install_plugin(self.project)
         self.assertTrue((Path(result["plugin"]) / "Source/UAssetAgent/UAssetAgent.Build.cs").is_file())
+        self.assertEqual((Path(result["plugin"]) / "LICENSE").read_bytes(), (agent.ROOT / "LICENSE").read_bytes())
         self.assertEqual(json.loads(self.project.read_text())["Custom"], "keep")
         self.assertEqual(len(json.loads(Path(result["project_backup"]).read_text())["Plugins"]), 1)
         self.assertEqual(len(json.loads(self.project.read_text())["Plugins"]), 2)

@@ -287,3 +287,8 @@ The native implementation uses Epic's [Blueprint creation API](https://dev.epicg
 and the locally installed UE 5.4 headers for graph/schema/compiler APIs. The
 agent interface follows the MCP [stdio transport](https://modelcontextprotocol.io/specification/2024-11-05/basic/transports)
 and [tools protocol](https://modelcontextprotocol.io/specification/2024-11-05/server/tools).
+
+## License
+
+UAsset Agent is distributed under the PolyForm Noncommercial License 1.0.0.
+See [LICENSE](LICENSE) for the terms and commercial licensing contact.

@@ -275,6 +275,8 @@ def install_plugin(project, source=ROOT, update=False):
             if (source / name).is_dir():
                 shutil.copytree(source / name, destination / name, dirs_exist_ok=True)
         shutil.copy2(source / "UAssetAgent.uplugin", destination / "UAssetAgent.uplugin")
+        if (source / "LICENSE").is_file():
+            shutil.copy2(source / "LICENSE", destination / "LICENSE")
         backup = project.with_name(project.name + "." + uuid.uuid4().hex[:8] + ".bak")
         shutil.copy2(project, backup)
         temporary = project.with_name(project.name + ".uasset-agent.tmp")
