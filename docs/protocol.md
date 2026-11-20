@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 4
+# UAsset Agent JSON protocol, version 5
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -725,6 +725,31 @@ World Partition actors are saved in their external actor packages. The tool
 attempts disk rollback from the backups on write failure and reports any
 unrestored packages in `rollback_failures`. External actor files must be
 in the map's external actor directory.
+
+## Asset references (protocol 5)
+
+`blueprint_references` returns the sorted package paths in `references`.
+The default direction is `referencers` (incoming). Use `dependencies` for
+outgoing references. Set `recursive:true` to follow the same direction through
+the entire dependency graph. `include_soft` defaults to true. With
+`include_soft:false`, every traversed edge must be a hard package reference.
+
+`blueprint_find_path` searches packages recursively under `folder` (default
+`/Game`) for direct references to `path_prefix`. The prefix matches complete
+path segments. It can identify one package or a folder subtree. `matches`
+lists each matching package and the matched target `references`. Map matches
+can include external actors and report their physical package paths in
+`source_packages`.
+
+```json
+{"action":"references","asset":"/Game/Waterline/BP_Ocean_Time","direction":"referencers","recursive":true,"include_soft":false}
+{"action":"find_path","path_prefix":"/Game/Waterline/","folder":"/Game/Maps"}
+```
+
+Both actions use Asset Registry package metadata, including dependencies
+recorded in saved maps. They can report references to missing packages when
+those paths are present in the registry. Paths assembled at runtime or stored
+only in arbitrary text are outside package metadata.
 
 ## Asset maintenance (protocol 2)
 

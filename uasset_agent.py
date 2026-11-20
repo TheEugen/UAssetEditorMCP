@@ -33,7 +33,7 @@ def validate_request(request):
     if not isinstance(request, dict):
         raise AgentError("Request must be a JSON object")
     action = request.get("action")
-    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "material_inspect", "material_apply", "level_inspect", "level_apply"}:
+    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path"}:
         raise AgentError("Unknown action; read blueprint_protocol for supported actions")
     if action in {"list", "compile", "redirectors", "fixup_redirectors"}:
         path = request.get("path", "/Game")
@@ -60,6 +60,22 @@ def validate_request(request):
             raise AgentError("asset must be a /Game/package/path without a file extension")
     if action == "functions" and not isinstance(request.get("class"), str):
         raise AgentError("functions requires a class object path")
+    if action in {"references", "find_path"}:
+        paths = {"asset": request.get("asset")} if action == "references" else {
+            "path_prefix": request.get("path_prefix"), "folder": request.get("folder", "/Game")}
+        for field, value in paths.items():
+            if not isinstance(value, str):
+                raise AgentError(field + " must be an Unreal package path")
+            path = value[:-1] if action == "find_path" and value.endswith("/") else value
+            if (not path.startswith("/") or any(c in path for c in (".", "\\", ":")) or
+                    any(not part for part in path.split("/")[1:]) or
+                    (action == "references" and "/" not in path[1:])):
+                raise AgentError(field + " must be an Unreal package path")
+        if action == "references" and request.get("direction", "referencers") not in ("referencers", "dependencies"):
+            raise AgentError("direction must be referencers or dependencies")
+        for field in ("include_soft", "recursive"):
+            if field in request and not isinstance(request[field], bool):
+                raise AgentError(field + " must be a boolean")
     if action in {"apply", "create", "material_apply", "level_apply"}:
         ops = request.get("operations")
         if not isinstance(ops, list) or len(ops) > 1000:
@@ -306,6 +322,13 @@ def tool_definitions():
             "asset": asset, "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
             "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
             "dry_run": {"type": "boolean", "default": True}}, ["asset", "expected_revision", "operations"]),
+        ("blueprint_references", "Read package dependents or dependencies from Unreal's Asset Registry. Can traverse recursively and include soft references.", {
+            "asset": asset, "direction": {"type": "string", "enum": ["referencers", "dependencies"], "default": "referencers"},
+            "recursive": {"type": "boolean", "default": False}, "include_soft": {"type": "boolean", "default": True}}, ["asset"]),
+        ("blueprint_find_path", "Find packages under a folder with a reference into a package path prefix. Includes map imports and World Partition actors.", {
+            "path_prefix": {"type": "string", "description": "Target package or folder, e.g. /Game/Waterline."},
+            "folder": {"type": "string", "default": "/Game", "description": "Source folder to search recursively."},
+            "include_soft": {"type": "boolean", "default": True}}, ["path_prefix"]),
         ("blueprint_redirectors", "List on-disk redirectors recursively, including missing destinations. Reports destination, chain and resolved/missing/cycle/unknown status from asset registry metadata; does not fix or delete assets.",
          {"path": {"type": "string", "default": "/Game"}}, []),
         ("blueprint_delete_asset", "Delete a single /Game asset with backup and registry referencer check. Defaults to dry run and force:false. force:true can leave broken references; read blueprint_protocol. Use revision from inspection or the deletion dry run.",

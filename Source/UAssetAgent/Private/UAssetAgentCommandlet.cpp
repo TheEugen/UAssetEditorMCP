@@ -1242,6 +1242,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 #include "UAssetAgentMaintenance.inl"
 #include "UAssetAgentMaterials.inl"
 #include "UAssetAgentLevels.inl"
+#include "UAssetAgentReferences.inl"
 #include "UAssetAgentFunctionLibrary.inl"
 
 static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
@@ -1288,8 +1289,10 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 4);
+    Response->SetNumberField(TEXT("protocol_version"), 5);
     Response->SetBoolField(TEXT("saved"), false);
+    if (Action == TEXT("references") || Action == TEXT("find_path"))
+    { ReferenceAction(Request, Response, Action == TEXT("find_path")); return; }
     if (Action == TEXT("level_inspect") || Action == TEXT("level_apply"))
     { LevelAction(Request, Response, Action == TEXT("level_apply")); return; }
     if (Action == TEXT("material_inspect") || Action == TEXT("material_apply"))
@@ -1552,6 +1555,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 #include "UAssetAgentTests.inl"
 #include "UAssetAgentMaterialTests.inl"
 #include "UAssetAgentLevelTests.inl"
+#include "UAssetAgentReferenceTests.inl"
 #include "UAssetAgentV2Tests.inl"
 #endif
 
