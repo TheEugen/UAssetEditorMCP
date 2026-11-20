@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 5
+# UAsset Agent JSON protocol, version 6
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -750,6 +750,39 @@ Both actions use Asset Registry package metadata, including dependencies
 recorded in saved maps. They can report references to missing packages when
 those paths are present in the registry. Paths assembled at runtime or stored
 only in arbitrary text are outside package metadata.
+
+## Scoped reference replacement (protocol 6)
+
+`blueprint_replace_references` rewrites hard and soft references to one
+`/Game` asset in the referring packages selected by `scope`. Each entry
+selects a package or folder subtree. The source and destination assets are
+retained. The operation also maps generated Blueprint classes and class
+defaults, retargets same-name external members and call nodes, and refreshes
+and compiles the referring Blueprints. Existing graph links must remain
+compatible. Incompatible or missing members abort the edit.
+
+```json
+{
+  "action":"replace_references",
+  "from":"/Game/Waterline60/BP_Ocean",
+  "to":"/Game/Waterline62/BP_Ocean",
+  "scope":["/Game/Ships/BP_Galleon","/Game/Ships/Shared"],
+  "exclude_maps":true,
+  "dry_run":true
+}
+```
+
+The default dry run provides a report in `packages` with each package's
+replacement count and its Blueprint compile diagnostics. To save, supply
+the entire returned `revisions` map as `expected_revisions` and set
+`dry_run:false`. Every candidate must validate and compile before the tool
+backs up and saves changed packages. It reports `backups` and
+`changed_packages`, and attempts rollback from the backups on a write
+failure. Any unrestored files are listed in `rollback_failures`.
+
+Maps and their external packages are excluded by default and reported in
+`excluded_maps`. Set `exclude_maps:false` to include serialized asset
+references in them. Use `level_apply` to change a placed actor's class.
 
 ## Asset maintenance (protocol 2)
 

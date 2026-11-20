@@ -46,6 +46,7 @@
 #include "Materials/MaterialInstanceConstant.h"
 #include "MaterialShared.h"
 #include "Serialization/ArchiveReplaceObjectRef.h"
+#include "Serialization/ArchiveReplaceObjectAndStructPropertyRef.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SavePackage.h"
@@ -1243,6 +1244,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 #include "UAssetAgentMaterials.inl"
 #include "UAssetAgentLevels.inl"
 #include "UAssetAgentReferences.inl"
+#include "UAssetAgentReplaceReferences.inl"
 #include "UAssetAgentFunctionLibrary.inl"
 
 static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
@@ -1289,8 +1291,9 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 5);
+    Response->SetNumberField(TEXT("protocol_version"), 6);
     Response->SetBoolField(TEXT("saved"), false);
+    if (Action == TEXT("replace_references")) { ReplaceReferencesAction(Request, Response); return; }
     if (Action == TEXT("references") || Action == TEXT("find_path"))
     { ReferenceAction(Request, Response, Action == TEXT("find_path")); return; }
     if (Action == TEXT("level_inspect") || Action == TEXT("level_apply"))
@@ -1556,6 +1559,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 #include "UAssetAgentMaterialTests.inl"
 #include "UAssetAgentLevelTests.inl"
 #include "UAssetAgentReferenceTests.inl"
+#include "UAssetAgentReplaceReferenceTests.inl"
 #include "UAssetAgentV2Tests.inl"
 #endif
 

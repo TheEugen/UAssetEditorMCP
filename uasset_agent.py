@@ -33,7 +33,7 @@ def validate_request(request):
     if not isinstance(request, dict):
         raise AgentError("Request must be a JSON object")
     action = request.get("action")
-    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path"}:
+    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path", "replace_references"}:
         raise AgentError("Unknown action; read blueprint_protocol for supported actions")
     if action in {"list", "compile", "redirectors", "fixup_redirectors"}:
         path = request.get("path", "/Game")
@@ -82,7 +82,17 @@ def validate_request(request):
             raise AgentError("operations must be an array of at most 1000 operations")
         if any(not isinstance(op, dict) or not isinstance(op.get("op"), str) for op in ops):
             raise AgentError("Every operation must be an object with an op string")
-    for field in ("dry_run", "force", "template"):
+    if action == "replace_references":
+        for field in ("from", "to"):
+            validate_request({"action": "inspect", "asset": request.get(field)})
+        scope = request.get("scope")
+        if not isinstance(scope, list) or not 1 <= len(scope) <= 1000:
+            raise AgentError("scope must contain 1 to 1000 /Game package or folder paths")
+        for path in scope:
+            validate_request({"action": "list", "path": path.removesuffix("/") if isinstance(path, str) else path})
+        if request.get("dry_run") is False and "expected_revisions" not in request:
+            raise AgentError("A save requires expected_revisions from a dry run")
+    for field in ("dry_run", "force", "template", "exclude_maps"):
         if field in request and not isinstance(request[field], bool):
             raise AgentError(field + " must be a boolean")
     if action == "create":
@@ -98,8 +108,8 @@ def validate_request(request):
             raise AgentError("Animation creation requires skeleton or template:true")
     if "expected_revisions" in request:
         revisions = request["expected_revisions"]
-        if action != "fixup_redirectors" or not isinstance(revisions, dict):
-            raise AgentError("expected_revisions must be a fixup_redirectors revision map")
+        if action not in {"fixup_redirectors", "replace_references"} or not isinstance(revisions, dict):
+            raise AgentError("expected_revisions must be a fixup_redirectors or replace_references revision map")
         for asset, revision in revisions.items():
             validate_request({"action": "inspect", "asset": asset, "expected_revision": revision})
     if action in {"material_apply", "level_apply"} or "expected_revision" in request:
@@ -329,6 +339,11 @@ def tool_definitions():
             "path_prefix": {"type": "string", "description": "Target package or folder, e.g. /Game/Waterline."},
             "folder": {"type": "string", "default": "/Game", "description": "Source folder to search recursively."},
             "include_soft": {"type": "boolean", "default": True}}, ["path_prefix"]),
+        ("blueprint_replace_references", "Replace references to one asset within selected packages or folders. Dry run previews edits and Blueprint compile diagnostics. Saves require the preview's revisions.", {
+            "from": asset, "to": asset, "scope": {"type": "array", "items": asset, "minItems": 1, "maxItems": 1000},
+            "exclude_maps": {"type": "boolean", "default": True}, "dry_run": {"type": "boolean", "default": True},
+            "expected_revisions": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}},
+         ["from", "to", "scope"]),
         ("blueprint_redirectors", "List on-disk redirectors recursively, including missing destinations. Reports destination, chain and resolved/missing/cycle/unknown status from asset registry metadata; does not fix or delete assets.",
          {"path": {"type": "string", "default": "/Game"}}, []),
         ("blueprint_delete_asset", "Delete a single /Game asset with backup and registry referencer check. Defaults to dry run and force:false. force:true can leave broken references; read blueprint_protocol. Use revision from inspection or the deletion dry run.",
@@ -473,7 +488,7 @@ def main(argv=None):
                     raise AgentError("Request exceeds 4 MiB")
                 request = read_json(text)
                 if args.dry_run:
-                    if not isinstance(request, dict) or request.get("action") not in {"apply", "create", "delete_asset", "fixup_redirectors", "material_apply", "level_apply"}:
+                    if not isinstance(request, dict) or request.get("action") not in {"apply", "create", "delete_asset", "fixup_redirectors", "material_apply", "level_apply", "replace_references"}:
                         raise AgentError("--dry-run requires an edit or maintenance request")
                     request["dry_run"] = True
             elif args.command == "functions":

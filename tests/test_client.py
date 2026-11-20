@@ -128,13 +128,14 @@ class McpTests(unittest.TestCase):
     def test_handshake_and_discovery(self):
         self.assertEqual(self.rpc("initialize", {"protocolVersion": "2024-11-05"})["result"]["protocolVersion"], "2024-11-05")
         names = {d["name"] for d in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(len(names), 17)
+        self.assertEqual(len(names), 18)
         self.assertIn("blueprint_material_inspect", names)
         self.assertIn("blueprint_material_apply", names)
         self.assertIn("blueprint_level_inspect", names)
         self.assertIn("blueprint_level_apply", names)
         self.assertIn("blueprint_references", names)
         self.assertIn("blueprint_find_path", names)
+        self.assertIn("blueprint_replace_references", names)
         self.assertIn("blueprint_apply", names)
         self.assertIn("blueprint_compile", names)
         self.assertIn("blueprint_components", names)

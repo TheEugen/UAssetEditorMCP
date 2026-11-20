@@ -161,7 +161,7 @@ The server exposes `blueprint_protocol`, `blueprint_list`, `blueprint_compile`,
 `blueprint_functions`, `blueprint_create`, `blueprint_apply`, `blueprint_delete_asset`,
 `blueprint_fixup_redirectors`, `blueprint_material_inspect`, `blueprint_material_apply`,
 `blueprint_level_inspect`, `blueprint_level_apply`, `blueprint_references`,
-and `blueprint_find_path`. It uses stdio;
+`blueprint_find_path`, and `blueprint_replace_references`. It uses stdio;
 it does not open a network listener. Set the agent's tool timeout high enough
 for Unreal startup and compilation. Requests are processed sequentially, so
 in-flight tool cancellation is not currently implemented.
