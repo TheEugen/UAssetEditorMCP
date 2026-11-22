@@ -1,19 +1,38 @@
-# Win64 release runner
+# Publish the Win64 buyer ZIP
 
-GitHub runs the build and verification on a dedicated Windows x64 PC or VM, then publishes the validated artifact from a GitHub-hosted Ubuntu runner. The machine with Unreal only needs read access to the repository.
+A push to `main` runs the Python tests on GitHub-hosted Windows. To release that commit, run the publisher on your Windows build PC. Use the same PC and Windows account for all publications so the local release lock serializes updates to Latest.
 
 ## One-time setup
 
-1. On the dedicated Windows machine, use a licensed Epic Games Launcher account to install Unreal Engine **5.4.4** from the Library. Launch the editor once to finish installing prerequisites. Retain the Launcher installation registration. The build checks the Launcher inventory, exact engine version, installed-build marker and editor module BuildId. [Epic installation guide](https://dev.epicgames.com/documentation/en-us/unreal-engine/install-unreal-engine?application_version=5.4)
-2. Install Git and Visual Studio 2022 with **Game development with C++**, the UE 5.4-compatible MSVC v143 toolset and Windows SDK. The workflow uses the Python interpreter included with Unreal. [Epic toolchain guide](https://dev.epicgames.com/documentation/en-us/unreal-engine/setting-up-visual-studio-for-unreal-engine?application_version=5.4)
-3. Set the machine environment variable `UE_ENGINE_ROOT` to the Launcher directory that contains `Engine`. Give the build account access to that directory, its build caches and a short writable runner work path. Restart the runner service after changing its environment.
-4. Open **Settings → Actions → Runners → New self-hosted runner** in this repository. Select **Windows / x64** and run GitHub's registration commands on the dedicated machine. Keep the default labels and add the custom label **`ue-5.4.4-launcher`**. Run it as a service and confirm its status is **Idle**. Reserve the machine for trusted builds of this repository. [GitHub runner registration](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
-5. Enable GitHub Actions and permit the publishing job's `contents: write` permission. The workflow runs on pushes to `main`. A queued build can start when the runner connects. An expired run can be rerun from Actions.
+1. Install **Unreal Engine 5.4.4** through the Epic Games Launcher Library. Launch the editor once to finish prerequisite installation. The publisher checks the registered Launcher installation and the editor module BuildId. [Epic installation guide](https://dev.epicgames.com/documentation/en-us/unreal-engine/install-unreal-engine?application_version=5.4)
+2. Install Git, GitHub CLI and Visual Studio 2022 with **Game development with C++**, a UE 5.4-compatible MSVC v143 toolset and the Windows SDK. The build uses Unreal's bundled Python. [Epic toolchain guide](https://dev.epicgames.com/documentation/en-us/unreal-engine/setting-up-visual-studio-for-unreal-engine?application_version=5.4)
+3. From PowerShell, sign in with an account that can publish releases and clone a release checkout into a short writable path. [GitHub CLI login](https://cli.github.com/manual/gh_auth_login)
 
-## Build and publication
+   ```powershell
+   gh auth login --hostname github.com --web --git-protocol https
+   git clone --branch main https://github.com/TheEugen/UAssetEditorMCP.git C:\src\UAssetRelease
+   ```
 
-The workflow checks out the push SHA and calls `tools/package_release.py`, which runs `build-plugin.ps1`. It extracts the finished ZIP, installs it in a disposable project and talks to the extracted MCP server over stdio. Verification reads the complete protocol, creates a fixture Blueprint and inspects it in another editor process. The SHA-256 of that exact ZIP travels with the Actions run.
+## After pushing a commit to main
 
-The publish job queues with other publishers. It uploads to a draft tagged `ue5.4.4-win64-<full SHA>`, checks GitHub's asset size and digest, then publishes. The release notes identify the commit and ZIP checksum. The commit graph orders releases on the same line of history; for divergent histories the push workflow run number breaks the tie. Reruns keep the same tag and reuse a complete published asset. Incomplete draft uploads can be retried. [GitHub release API](https://docs.github.com/en/rest/releases/releases) · [Workflow concurrency](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
+In PowerShell, use your release checkout. At the prompt, enter the registered Launcher installation directory that contains `Engine`.
 
-Use the [stable buyer download](https://github.com/TheEugen/UAssetEditorMCP/releases/latest/download/UAssetEditorMCP-UE5.4.4-Win64.zip) for the Agensi listing. It becomes available with the first successful publication. Reserve Latest for these Win64 releases so the link continues to resolve.
+```powershell
+Set-Location C:\src\UAssetRelease
+git pull --ff-only origin main
+if ($LASTEXITCODE) { throw 'Could not update the release checkout' }
+$engine = Read-Host 'Epic Launcher UE 5.4.4 installation directory'
+& (Join-Path $engine 'Engine\Binaries\ThirdParty\Python3\Win64\python.exe') -B -X utf8 tools/publish_release.py --engine $engine
+```
+
+The command verifies that HEAD matches GitHub's current `main` and builds a fresh copy of that exact commit. It runs the unit tests and `build-plugin.ps1`, extracts the ZIP, checks the DLL and module metadata, installs the plugin into a disposable project and calls the packaged server to read `blueprint_protocol`, create a Blueprint and inspect it with Unreal.
+
+The validated ZIP is written to `dist/<full SHA>/UAssetEditorMCP-UE5.4.4-Win64.zip`. The publisher uploads it to a draft, verifies GitHub's size and SHA-256, then publishes the commit-tagged release. An older commit on the same history cannot take Latest from a newer release. If the command fails, fix the reported error and run it again. A retry can repair a draft and preserves the original asset for an already published commit.
+
+Check the Latest tag and asset in PowerShell.
+
+```powershell
+gh release view --repo TheEugen/UAssetEditorMCP --json tagName,assets --jq '{tag: .tagName, files: [.assets[].name]}'
+```
+
+The tag ends in the released commit's full SHA. Use the stable download link in the Agensi listing after the first successful publication. [Download the latest Win64 ZIP](https://github.com/TheEugen/UAssetEditorMCP/releases/latest/download/UAssetEditorMCP-UE5.4.4-Win64.zip)

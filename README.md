@@ -28,7 +28,7 @@ a disposable project.
 
 ## Install and build
 
-For Epic Launcher UE 5.4.4 on Windows, download the prebuilt plugin and MCP server, extract the ZIP, and follow the included `INSTALL.md`. [Latest Win64 ZIP](https://github.com/TheEugen/UAssetEditorMCP/releases/latest/download/UAssetEditorMCP-UE5.4.4-Win64.zip) · [Buyer installation](INSTALL.md) · [Release runner setup](docs/releases.md)
+For Epic Launcher UE 5.4.4 on Windows, download the prebuilt plugin and MCP server, extract the ZIP, and follow the included `INSTALL.md`. [Latest Win64 ZIP](https://github.com/TheEugen/UAssetEditorMCP/releases/latest/download/UAssetEditorMCP-UE5.4.4-Win64.zip) · [Buyer installation](INSTALL.md) · [Publish a release from Windows](docs/releases.md)
 
 ### Building from source
 
