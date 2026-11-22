@@ -19,6 +19,8 @@ import uuid
 VERSION = "2.0.0"
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 ROOT = Path(__file__).resolve().parent
+DISK_QUERIES = frozenset({"list", "inspect", "components", "functions", "redirectors", "references",
+                          "find_path", "diff", "asset_inspect", "material_inspect", "level_inspect", "compile"})
 
 
 class AgentError(Exception):
@@ -271,7 +273,9 @@ class Client:
     def execute(self, request):
         validate_request(request)
         with project_lock(self.saved / "project.lock", self.lock_timeout):
-            require_editor_closed(self.project)
+            disk_query = request["action"] in DISK_QUERIES
+            if not disk_query:
+                require_editor_closed(self.project)
             run_dir = self.saved / "Runs" / uuid.uuid4().hex
             run_dir.mkdir(parents=True)
             request_path = run_dir / "request.json"
@@ -300,6 +304,8 @@ class Client:
             if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
                 raise AgentError(f"Malformed commandlet response. Logs: {run_dir}")
             response["logs"] = str(run_dir)
+            if disk_query:
+                response["may_not_see_unsaved_editor_changes"] = True
             if result.returncode != 0 and response["ok"]:
                 response.update(ok=False, error=f"Unreal exited with code {result.returncode} after writing a response; inspect saved state before retrying")
             if request["action"] == "diff" and response["ok"]:
@@ -404,7 +410,7 @@ def tool_definitions():
           "expected_revisions": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}}, []),
         ("blueprint_components", "Inspect local, inherited Blueprint and native component template defaults without graph output. Returns component selectors and file revision for set_component_default operations.",
          {"asset": asset}, ["asset"]),
-        ("blueprint_compile", "Compile one Blueprint or recursively compile a folder in one Unreal process, without saving. Returns counts and only failures with diagnostics. Includes Blueprint subclasses. Editor must be closed; allow a long timeout for /Game.",
+        ("blueprint_compile", "Compile one Blueprint or recursively compile a folder in one Unreal process, without saving. Returns counts and only failures with diagnostics. Includes Blueprint subclasses. Reads the saved packages; allow a long timeout for /Game.",
          {"path": {"type": "string", "default": "/Game", "description": "Blueprint package or recursive folder path under /Game; defaults to the entire /Game tree."}}, []),
         ("blueprint_inspect", "Inspect normal, Animation, Widget or Function Library Blueprints: graphs, pose links, anim function bindings/properties, widget tree/slots/bindings/animations, defaults and revision. summary omits nodes and pins; graph selects one graph.", {"asset": asset}, ["asset"]),
         ("blueprint_functions", "Discover callable functions and parameter types on a class, e.g. /Script/Engine.KismetSystemLibrary.",

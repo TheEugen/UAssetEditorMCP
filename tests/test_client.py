@@ -91,6 +91,19 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(result["saved"])
 
     def test_editor_conflict_detection(self):
+        def query(command, **kwargs):
+            path = Path(next(s.split("=", 1)[1] for s in command if s.startswith("-Response=")))
+            path.write_text('{"ok":true,"saved":false}')
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(agent, "editor_processes", return_value=[(42, str(self.project))]), patch.object(agent.subprocess, "run", side_effect=query) as launch:
+            result = self.client.execute({"action": "inspect", "asset": "/Game/Test"})
+            self.assertTrue(result["may_not_see_unsaved_editor_changes"])
+            with self.assertRaisesRegex(agent.AgentError, "PID 42"):
+                self.client.execute({"action": "apply", "asset": "/Game/Test", "expected_revision": "0" * 40,
+                                     "operations": [], "dry_run": True})
+            self.assertEqual(launch.call_count, 1)
+
         for command in [f'UnrealEditor.exe "{self.project}"', "", "UnrealEditor.exe Project"]:
             with patch.object(agent, "editor_processes", return_value=[(42, command)]), self.assertRaises(agent.AgentError):
                 agent.require_editor_closed(self.project)

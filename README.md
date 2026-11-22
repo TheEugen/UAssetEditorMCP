@@ -30,7 +30,7 @@ a disposable project.
 
 Requires UE **5.4**, Python **3.9+**, and Unreal's C++ toolchain (on Windows,
 Visual Studio 2022 with the Unreal/C++ workload and Windows SDK). No pip packages.
-Close the target project's Unreal Editor before installing or running requests.
+Close the target project's Unreal Editor before installing or editing assets. Read-only queries can run while it is open.
 
 From this repository in PowerShell:
 
@@ -126,8 +126,7 @@ global options before the subcommand.
 
 For existing assets, use `inspect`'s revision as `expected_revision` in your edit
 request. Read [docs/protocol.md](docs/protocol.md) for examples and the operation
-reference. A client serializes requests per project, but the editor must remain
-closed throughout the batch. Each request starts Unreal; batching edits avoids
+reference. A client serializes requests per project. Close the editor throughout mutation batches, including previews. Each request starts Unreal; batching edits avoids
 repeated startup costs. This version does not edit live inside an open editor.
 
 ## Connect an MCP-capable agent
@@ -148,7 +147,7 @@ without overwriting it. Use `--config <path>` to select another config file, or
 merge the example manually. Restart Codex and check `/mcp`, then ask it to read
 `blueprint_protocol`. The config sets a 30-minute Unreal timeout and a longer
 Codex tool timeout for project-wide compile checks. No separate MCP server or
-pip package is needed. Keep Unreal closed when using the asset tools.
+pip package is needed. Queries read the saved packages. Close Unreal for edits.
 
 Codex configuration fields follow the [official MCP configuration documentation](https://developers.openai.com/codex/mcp/).
 

@@ -3,7 +3,7 @@
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
 Use package paths such as `/Game/Characters/BP_Player`, never filesystem paths
-or `.uasset` extensions. Close this project's Unreal Editor before requests.
+or `.uasset` extensions. Close this project's editor for mutations, including dry runs. Read-only queries work with it open and report `may_not_see_unsaved_editor_changes: true` because the commandlet reads the saved packages.
 
 ## Workflow
 
@@ -128,7 +128,7 @@ Any failure produces `ok:false`, a nonzero CLI exit code and an MCP tool error
 with the structured report intact. Crashes/timeouts can prevent a complete
 report; inspect the retained logs in that case. Set a larger client and MCP host
 timeout for a project-wide check, for example CLI `--timeout 1800` before the
-`compile` subcommand. Rebuild changed C++ first and keep the project editor closed.
+`compile` subcommand. Rebuild changed C++ first. Compilation reads saved packages.
 
 ### Function lookup and edits
 
