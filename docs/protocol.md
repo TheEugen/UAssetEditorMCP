@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 9
+# UAsset Agent JSON protocol, version 10
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -182,8 +182,7 @@ Authoring type descriptors:
 ```
 
 Primitive categories: `bool`, `byte`, `int`, `int64`, `float` (32-bit), `double`
-(64-bit), `string`, `name`, `text`. Containers: `none`, `array`, `set`.
-Maps, delegates, soft references and weak references cannot yet be authored.
+(64-bit), `string`, `name`, `text`. Containers include `none`, `array`, `set` and `map`. For a map, the outer type describes the key and `value_type` describes the scalar value. `softobject` and `softclass` take a class `path`. `delegate` and `mcdelegate` take the object path of an existing delegate signature UFunction in `signature`.
 Inspection reports Unreal's raw category: float/double appear as `real` with a
 `subcategory` of `float`/`double`, and enums appear as `byte` with a type path.
 
@@ -467,9 +466,7 @@ supported. Source control checkout is manual; read-only assets are rejected.
 The client lock serializes cooperating clients on the same project. Calling the
 commandlet directly bypasses that lock and the editor-process check.
 
-This version does not add/remove actor components or author animation sequences,
-widget animations, materials, levels, interfaces, macro libraries, arbitrary custom K2 node classes,
-variable renames or existing variable replication-flag changes.
+See the graph authoring operations below for actor components, variables, interfaces, macro libraries and timelines.
 Inspection is a graph description, not a lossless asset round-trip format.
 
 ## Animation Blueprints (protocol 2)
@@ -862,3 +859,30 @@ Both write actions preview by default. Repeat with `dry_run:false` to persist. U
 ### Blueprint diff
 
 Call `blueprint_diff` with `a` and `b`. Either may be a /Game package or an absolute .uasset file under this project's Saved/UAssetAgent/Backups directory. Optional `normalize_paths` maps folder prefixes such as `{"/Game/Older/":"/Game/Newer/"}`. The response contains `identical` and ordered changes with a path, change kind, and before/after values. Node paths contain their GUID.
+
+### Blueprint graph authoring
+
+Use these operations inside a Blueprint `create` or `apply` batch.
+
+| Operation | Fields and behavior |
+|---|---|
+| `rename_variable` | `name`, `new_name`. Renames a locally declared member and its graph references while preserving its member GUID and RepNotify function. External variable references must identify the member by GUID. |
+| `set_variable_replication` | `name` and at least one of `replicated`, `condition` (such as `COND_OwnerOnly`), or `rep_notify` (existing function name or empty string). |
+| `add_component` | `name`, concrete component `class`, optional `parent` scene component name or ID. An unattached scene component uses the existing scene root if available. |
+| `remove_component` | `component` name or ID. Removes a locally authored component, promotes its children and checks for references or inherited overrides. |
+| `implement_interface` | `interface` is a native or generated interface class path. Create a Blueprint interface with `kind:"interface"` and declare methods with `add_function`. |
+| `add_macro` | `name`, optional `inputs` and `outputs` using function parameter descriptors (including `{"category":"exec"}`). Use `entry_id` and `result_id` aliases to wire its tunnel nodes in the named graph. Use `kind:"macro_library"` to create a reusable library. |
+
+Additional `add_node` kinds use the existing `graph` and `id` selectors.
+
+```json
+{"op":"add_node","kind":"cast","id":"pawn","class":"/Script/Engine.Pawn"}
+{"op":"add_node","kind":"make_struct","id":"make","struct":"/Script/Engine.WalkableSlopeOverride"}
+{"op":"add_node","kind":"break_struct","id":"break","struct":"/Script/Engine.WalkableSlopeOverride"}
+{"op":"add_node","kind":"select","id":"choose","index_type":{"category":"bool"}}
+{"op":"add_node","kind":"foreach","id":"each"}
+{"op":"add_node","kind":"macro","id":"expand","macro":"Pass","library":"/Game/Macros/BPM_Utils.BPM_Utils"}
+{"op":"add_node","kind":"timeline","id":"clock","name":"Progress","length":2,"loop":false,"autoplay":false,"float_tracks":[{"name":"Alpha","keys":[{"time":0,"value":0},{"time":2,"value":1}]}]}
+```
+
+Select accepts a bool, byte, int or enum index type. Connect ForEach's array pin to a typed array. A macro reference defaults to the current Blueprint. Timelines run in Actor event graphs. Inspect returns the timeline settings, float tracks and keys. For structs with native make or break functions, use a call node for that function.

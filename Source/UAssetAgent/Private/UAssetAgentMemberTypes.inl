@@ -93,7 +93,7 @@ static bool ChangeVariableType(UBlueprint* Blueprint, FName Name, const FEdGraph
     Require(Index != INDEX_NONE, TEXT("Local member variable not found; edit its declaring Blueprint: ") + Name.ToString());
     FBPVariableDescription& Variable = Blueprint->NewVariables[Index];
     if (Variable.VarType == Type) { return false; }
-    Require(!(Type.IsSet() && (Variable.PropertyFlags & CPF_Net)), TEXT("Replicated variables cannot be changed to sets"));
+    Require(!((Type.IsSet() || Type.IsMap()) && (Variable.PropertyFlags & CPF_Net)), TEXT("Replicated variables cannot be changed to sets or maps"));
     const FMemberNodeSnapshot Nodes = CaptureMemberNodes(Blueprint, Blueprint, {Name});
     Blueprint->Modify();
     const bool WasBool = Variable.VarType.PinCategory == UEdGraphSchema_K2::PC_Boolean;

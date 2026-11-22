@@ -9,7 +9,8 @@ static void ValidateLibraryOperation(const FJson& Op)
     {
         const FString NodeKind = String(Op, TEXT("kind"));
         Require(NodeKind == TEXT("call") || NodeKind == TEXT("branch") || NodeKind == TEXT("sequence") ||
-            NodeKind == TEXT("reroute"), TEXT("Node kind is not supported in function libraries: ") + NodeKind);
+            NodeKind == TEXT("reroute") || NodeKind == TEXT("cast") || NodeKind == TEXT("make_struct") ||
+            NodeKind == TEXT("break_struct") || NodeKind == TEXT("select") || NodeKind == TEXT("foreach") || NodeKind == TEXT("macro"), TEXT("Node kind is not supported in function libraries: ") + NodeKind);
     }
 }
 

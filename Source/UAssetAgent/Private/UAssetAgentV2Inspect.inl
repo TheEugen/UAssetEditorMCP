@@ -1,6 +1,8 @@
 // Included inside UAssetAgent after the common JSON/reflection helpers.
 static FString BlueprintKind(const UBlueprint* BP)
 {
+    if (BP->BlueprintType == BPTYPE_Interface) { return TEXT("interface"); }
+    if (BP->BlueprintType == BPTYPE_MacroLibrary) { return TEXT("macro_library"); }
     if (BP->BlueprintType == BPTYPE_FunctionLibrary) { return TEXT("function_library"); }
     return BP->IsA<UAnimBlueprint>() ? TEXT("animation") : BP->IsA<UWidgetBlueprint>() ? TEXT("widget") : TEXT("normal");
 }

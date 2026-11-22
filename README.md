@@ -266,8 +266,8 @@ Component defaults support local SCS templates, inherited Blueprint overrides
 and native class default subobjects. Variable deletion rejects known references;
 event parameter edits preserve unchanged wiring and update local callers.
 
-Variable renaming, actor component creation/removal, creating state machines or
-anim layers, editing Control Rig/IK Rig assets and authoring widget animations
+Blueprints support member renames, replication changes and adding or removing authored actor components.
+Creating state machines or anim layers, editing Control Rig/IK Rig assets and authoring widget animations
 remain outside this version. Referenced widget rename/removal fails clearly;
 binding/animation/navigation reference rewriting is intentionally limited.
 

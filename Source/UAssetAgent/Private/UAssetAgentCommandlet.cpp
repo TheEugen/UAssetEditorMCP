@@ -29,6 +29,15 @@
 #include "Components/ActorComponent.h"
 #include "GameFramework/Actor.h"
 #include "HAL/FileManager.h"
+#include "K2Node_Timeline.h"
+#include "Engine/TimelineTemplate.h"
+#include "Curves/CurveFloat.h"
+#include "K2Node_DynamicCast.h"
+#include "K2Node_MakeStruct.h"
+#include "K2Node_BreakStruct.h"
+#include "K2Node_Select.h"
+#include "K2Node_MacroInstance.h"
+#include "K2Node_Tunnel.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_ExecutionSequence.h"
@@ -320,11 +329,12 @@ static void AvailableName(UBlueprint* BP, const FString& Name)
     }
 }
 
-static FEdGraphPinType PinType(const FJson& J)
+static FEdGraphPinType PinType(const FJson& J, bool AllowExec = false)
 {
     FEdGraphPinType Type;
     const FString Name = String(J, TEXT("category"));
-    if (Name == TEXT("float") || Name == TEXT("double"))
+    if (AllowExec && Name == TEXT("exec")) { Type.PinCategory = UEdGraphSchema_K2::PC_Exec; }
+    else if (Name == TEXT("float") || Name == TEXT("double"))
     {
         Type.PinCategory = UEdGraphSchema_K2::PC_Real;
         Type.PinSubCategory = Name == TEXT("float") ? UEdGraphSchema_K2::PC_Float : UEdGraphSchema_K2::PC_Double;
@@ -332,7 +342,7 @@ static FEdGraphPinType PinType(const FJson& J)
     else if (Name == TEXT("bool") || Name == TEXT("int") || Name == TEXT("int64") || Name == TEXT("byte") ||
         Name == TEXT("string") || Name == TEXT("name") || Name == TEXT("text"))
     { Type.PinCategory = FName(*Name); }
-    else if (Name == TEXT("object") || Name == TEXT("class"))
+    else if (Name == TEXT("object") || Name == TEXT("class") || Name == TEXT("softobject") || Name == TEXT("softclass"))
     {
         UClass* Class = LoadObject<UClass>(nullptr, *String(J, TEXT("path")));
         Require(Class && UEdGraphSchema_K2::IsAllowableBlueprintVariableType(Class), TEXT("Invalid Blueprint class type"));
@@ -353,9 +363,30 @@ static FEdGraphPinType PinType(const FJson& J)
         Type.PinCategory = UEdGraphSchema_K2::PC_Byte;
         Type.PinSubCategoryObject = Enum;
     }
+    else if (Name == TEXT("delegate") || Name == TEXT("mcdelegate"))
+    {
+        UFunction* Signature = LoadObject<UFunction>(nullptr, *String(J, TEXT("signature")));
+        Require(Signature && Signature->HasAnyFunctionFlags(FUNC_Delegate), TEXT("Expected a delegate signature function"));
+        Type.PinCategory = Name == TEXT("delegate") ? UEdGraphSchema_K2::PC_Delegate : UEdGraphSchema_K2::PC_MCDelegate;
+        FMemberReference::FillSimpleMemberReference(Signature, Type.PinSubCategoryMemberReference);
+    }
     else { throw FFailure{TEXT("Unsupported type category: ") + Name}; }
     const FString Container = String(J, TEXT("container"), TEXT("none"), false);
-    Require(Container == TEXT("none") || Container == TEXT("array") || Container == TEXT("set"), TEXT("container must be none, array or set"));
+    if (Container == TEXT("map"))
+    {
+        Require(FBlueprintEditorUtils::HasGetTypeHash(Type), TEXT("Map keys must be hashable Blueprint types"));
+        FJson Terminal = Object(J, TEXT("value_type"));
+        Require(String(Terminal, TEXT("container"), TEXT("none"), false) == TEXT("none"), TEXT("Nested containers are unsupported"));
+        const FEdGraphPinType Value = PinType(Terminal);
+        Type.ContainerType = EPinContainerType::Map;
+        Type.PinValueType.TerminalCategory = Value.PinCategory;
+        Type.PinValueType.TerminalSubCategory = Value.PinSubCategory;
+        Type.PinValueType.TerminalSubCategoryObject = Value.PinSubCategoryObject;
+        Require(Value.PinCategory != UEdGraphSchema_K2::PC_Delegate && Value.PinCategory != UEdGraphSchema_K2::PC_MCDelegate,
+            TEXT("A map value cannot encode a delegate signature"));
+        return Type;
+    }
+    Require(Container == TEXT("none") || Container == TEXT("array") || Container == TEXT("set"), TEXT("container must be none, array, set or map"));
     Type.ContainerType = Container == TEXT("array") ? EPinContainerType::Array :
         Container == TEXT("set") ? EPinContainerType::Set : EPinContainerType::None;
     return Type;
@@ -368,6 +399,12 @@ static FJson DescribeType(const FEdGraphPinType& Type)
     J->SetStringField(TEXT("subcategory"), Type.PinSubCategory.ToString());
     if (Type.PinSubCategoryObject.IsValid()) { J->SetStringField(TEXT("path"), Type.PinSubCategoryObject->GetPathName()); }
     J->SetStringField(TEXT("container"), Type.IsArray() ? TEXT("array") : Type.IsSet() ? TEXT("set") : Type.IsMap() ? TEXT("map") : TEXT("none"));
+    if (Type.IsMap()) { J->SetObjectField(TEXT("value_type"), DescribeType(FEdGraphPinType::GetPinTypeForTerminalType(Type.PinValueType))); }
+    if (Type.PinCategory == UEdGraphSchema_K2::PC_Delegate || Type.PinCategory == UEdGraphSchema_K2::PC_MCDelegate)
+    {
+        if (const UFunction* Sig = FMemberReference::ResolveSimpleMemberReference<UFunction>(Type.PinSubCategoryMemberReference))
+        { J->SetStringField(TEXT("signature"), Sig->GetPathName()); }
+    }
     J->SetBoolField(TEXT("reference"), Type.bIsReference);
     J->SetBoolField(TEXT("const"), Type.bIsConst);
     return J;
@@ -571,6 +608,42 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
     { if (Metadata) { DescribeWidgetBlueprint(Widget, J, Mode == TEXT("full")); } }
     if (Metadata)
     {
+        TArray<TSharedPtr<FJsonValue>> Interfaces;
+        for (const auto& Interface : BP->ImplementedInterfaces)
+        { if (Interface.Interface) { Interfaces.Add(MakeShared<FJsonValueString>(Interface.Interface->GetPathName())); } }
+        J->SetArrayField(TEXT("interfaces"), Interfaces);
+        TArray<TSharedPtr<FJsonValue>> Timelines;
+        for (const UTimelineTemplate* Timeline : BP->Timelines)
+        {
+            if (!Timeline) { continue; }
+            FJson Description = MakeShared<FJsonObject>();
+            Description->SetStringField(TEXT("name"), Timeline->GetVariableName().ToString());
+            Description->SetNumberField(TEXT("length"), Timeline->TimelineLength);
+            Description->SetBoolField(TEXT("loop"), Timeline->bLoop);
+            Description->SetBoolField(TEXT("autoplay"), Timeline->bAutoPlay);
+            TArray<TSharedPtr<FJsonValue>> Tracks;
+            for (const auto& Track : Timeline->FloatTracks)
+            {
+                FJson T = MakeShared<FJsonObject>();
+                T->SetStringField(TEXT("name"), Track.GetTrackName().ToString());
+                if (Mode == TEXT("full") && Track.CurveFloat)
+                {
+                    TArray<TSharedPtr<FJsonValue>> Keys;
+                    for (const auto& Key : Track.CurveFloat->FloatCurve.GetConstRefOfKeys())
+                    {
+                        FJson K = MakeShared<FJsonObject>();
+                        K->SetNumberField(TEXT("time"), Key.Time);
+                        K->SetNumberField(TEXT("value"), Key.Value);
+                        Keys.Add(JsonValue(K));
+                    }
+                    T->SetArrayField(TEXT("keys"), Keys);
+                }
+                Tracks.Add(JsonValue(T));
+            }
+            Description->SetArrayField(TEXT("float_tracks"), Tracks);
+            Timelines.Add(JsonValue(Description));
+        }
+        J->SetArrayField(TEXT("timelines"), Timelines);
         TArray<TSharedPtr<FJsonValue>> Variables;
         for (const FBPVariableDescription& V : BP->NewVariables)
         {
@@ -580,6 +653,7 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
             Item->SetStringField(TEXT("default"), V.DefaultValue);
             Item->SetBoolField(TEXT("replicated"), (V.PropertyFlags & CPF_Net) != 0);
             Item->SetStringField(TEXT("rep_notify"), V.RepNotifyFunc.ToString());
+            Item->SetStringField(TEXT("replication_condition"), StaticEnum<ELifetimeCondition>()->GetNameStringByValue(V.ReplicationCondition));
             Variables.Add(JsonValue(Item));
         }
         J->SetArrayField(TEXT("variables"), Variables);
@@ -671,6 +745,9 @@ static bool Compile(UBlueprint* BP, const FJson& Response, EBlueprintCompileOpti
 }
 
 #include "UAssetAgentMemberTypes.inl"
+static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, bool IncludeChildReferencers);
+#include "UAssetAgentDeclarations.inl"
+#include "UAssetAgentGraphAuthoring.inl"
 #include "UAssetAgentCallEdit.inl"
 
 class FEditor
@@ -753,7 +830,7 @@ public:
             FString Name = String(P, TEXT("name"));
             ValidName(Name);
             Require(!N->FindPin(FName(*Name)), TEXT("Parameter name already exists: ") + Name);
-            FEdGraphPinType Type = PinType(Object(P, TEXT("type")));
+            FEdGraphPinType Type = PinType(Object(P, TEXT("type")), N->IsA<UK2Node_Tunnel>());
             FText Error;
             Require(N->CanCreateUserDefinedPin(Type, Direction, Error), TEXT("Cannot create parameter: ") + Error.ToString());
             Require(N->CreateUserDefinedPin(FName(*Name), Type, Direction, false) != nullptr, TEXT("Cannot create parameter"));
@@ -947,6 +1024,41 @@ public:
         FString Kind = String(Op, TEXT("op"));
         if (Kind == TEXT("edit_function") && BP->BlueprintType == BPTYPE_FunctionLibrary)
         { EditLibraryFunction(Op); return; }
+        if (BP->BlueprintType == BPTYPE_Interface)
+        { Require(Kind == TEXT("add_function"), TEXT("Interface assets accept function declarations")); }
+        if (BP->BlueprintType == BPTYPE_MacroLibrary)
+        {
+            Require(Kind == TEXT("add_macro") || Kind == TEXT("add_node") || Kind == TEXT("connect") || Kind == TEXT("disconnect") ||
+                Kind == TEXT("set_pin_default") || Kind == TEXT("move_node") || Kind == TEXT("delete_node") || Kind == TEXT("retarget_call"),
+                TEXT("Macro libraries support macro graph editing"));
+        }
+        if (Kind == TEXT("add_macro"))
+        {
+            Require(BP->BlueprintType == BPTYPE_Normal || BP->BlueprintType == BPTYPE_MacroLibrary, TEXT("Blueprint cannot own a macro"));
+            const FString Name = String(Op, TEXT("name"));
+            AvailableName(BP, Name);
+            UEdGraph* Macro = FBlueprintEditorUtils::CreateNewGraph(BP, FName(*Name), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+            FBlueprintEditorUtils::AddMacroGraph(BP, Macro, true, nullptr);
+            TArray<UK2Node_Tunnel*> Tunnels;
+            Macro->GetNodesOfClass(Tunnels);
+            Require(Tunnels.Num() == 2, TEXT("Expected two macro terminals"));
+            for (auto* Tunnel : Tunnels)
+            {
+                const bool Entry = Tunnel->bCanHaveOutputs;
+                Parameters(Tunnel, Op, Entry ? TEXT("inputs") : TEXT("outputs"), Entry ? EGPD_Output : EGPD_Input);
+                const TCHAR* Id = Entry ? TEXT("entry_id") : TEXT("result_id");
+                if (Op->HasField(Id)) { Remember(String(Op, Id), Tunnel); }
+            }
+            FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+            return;
+        }
+        if (Kind == TEXT("implement_interface"))
+        {
+            auto* Class = LoadObject<UClass>(nullptr, *String(Op, TEXT("interface")));
+            Require(Class && Class->HasAnyClassFlags(CLASS_Interface), TEXT("Expected an interface class"));
+            Require(FBlueprintEditorUtils::ImplementNewInterface(BP, Class->GetClassPathName()), TEXT("Could not implement interface"));
+            return;
+        }
         if (ApplyV2(Op)) { return; }
         if (Kind == TEXT("reparent"))
         {
@@ -1031,6 +1143,33 @@ public:
             }
             return;
         }
+        if (Kind == TEXT("set_variable_replication"))
+        {
+            const int32 Index = FBlueprintEditorUtils::FindNewVariableIndex(BP, FName(*String(Op, TEXT("name"))));
+            Require(Index != INDEX_NONE, TEXT("Local member variable not found"));
+            BP->Modify();
+            auto& Var = BP->NewVariables[Index];
+            Require(Op->HasField(TEXT("replicated")) || Op->HasField(TEXT("condition")) || Op->HasField(TEXT("rep_notify")),
+                TEXT("Specify replicated, condition or rep_notify"));
+            const bool Enabled = Boolean(Op, TEXT("replicated"), (Var.PropertyFlags & CPF_Net) != 0);
+            const FString DefaultCondition = StaticEnum<ELifetimeCondition>()->GetNameStringByValue(Enabled ? Var.ReplicationCondition.GetValue() : COND_None);
+            const int64 Condition = StaticEnum<ELifetimeCondition>()->GetValueByNameString(String(Op, TEXT("condition"), DefaultCondition, false));
+            Require(Condition >= 0 && Condition < COND_Max && (Enabled || Condition == COND_None), TEXT("Invalid replication condition"));
+            const FName Notify(*String(Op, TEXT("rep_notify"), Enabled ? Var.RepNotifyFunc.ToString() : FString(), false));
+            Require(Notify.IsNone() || (Enabled && BP->SkeletonGeneratedClass && BP->SkeletonGeneratedClass->FindFunctionByName(Notify)),
+                TEXT("rep_notify requires a replicated member and an existing notification function"));
+            Require(!Enabled || (!Var.VarType.IsMap() && !Var.VarType.IsSet()), TEXT("Maps and sets cannot be replicated"));
+            Var.PropertyFlags &= ~(CPF_Net | CPF_RepNotify);
+            if (Enabled) { Var.PropertyFlags |= CPF_Net; }
+            if (!Notify.IsNone()) { Var.PropertyFlags |= CPF_RepNotify; }
+            Var.RepNotifyFunc = Notify;
+            Var.ReplicationCondition = static_cast<ELifetimeCondition>(Condition);
+            FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+            return;
+        }
+        if (Kind == TEXT("rename_variable")) { RenameAuthoredVariable(BP, Op); return; }
+        if (Kind == TEXT("add_component") || Kind == TEXT("remove_component"))
+        { EditAuthoredComponent(BP, Op, Kind == TEXT("remove_component")); return; }
         if (Kind == TEXT("replace_component_class"))
         {
             if (USCS_Node* Changed = ReplaceComponentClass(BP, Op))
@@ -1067,6 +1206,8 @@ public:
             V.PropertyFlags |= CPF_BlueprintVisible;
             if (Boolean(Op, TEXT("instance_editable"))) { V.PropertyFlags &= ~CPF_DisableEditOnInstance; }
             else { V.PropertyFlags |= CPF_DisableEditOnInstance; }
+            Require((!V.VarType.IsMap() && !V.VarType.IsSet()) || (!Boolean(Op, TEXT("replicated")) &&
+                String(Op, TEXT("rep_notify"), FString(), false).IsEmpty()), TEXT("Maps and sets cannot be replicated"));
             if (Boolean(Op, TEXT("replicated"))) { V.PropertyFlags |= CPF_Net; }
             FString Notify = String(Op, TEXT("rep_notify"), FString(), false);
             if (!Notify.IsEmpty())
@@ -1208,12 +1349,23 @@ public:
             else if (Type == TEXT("sequence")) { N = NewObject<UK2Node_ExecutionSequence>(G); }
             else if (Type == TEXT("self")) { N = NewObject<UK2Node_Self>(G); }
             else if (Type == TEXT("reroute")) { N = NewObject<UK2Node_Knot>(G); }
-            else { throw FFailure{TEXT("Unsupported node kind: ") + Type}; }
+            else { N = NewGraphNode(BP, G, Type, Op); }
             Require(N->IsCompatibleWithGraph(G), TEXT("Node is incompatible with this graph"));
             G->AddNode(N, false, false);
             N->CreateNewGuid();
             N->PostPlacedNewNode();
             N->AllocateDefaultPins();
+            if (Type == TEXT("select") && Op->HasField(TEXT("index_type")))
+            {
+                auto* Select = CastChecked<UK2Node_Select>(N);
+                const FEdGraphPinType Index = PinType(Object(Op, TEXT("index_type")));
+                Require(!Index.IsContainer() && (Index.PinCategory == UEdGraphSchema_K2::PC_Int ||
+                    Index.PinCategory == UEdGraphSchema_K2::PC_Byte || Index.PinCategory == UEdGraphSchema_K2::PC_Boolean),
+                    TEXT("Select index type must be int, byte, bool or enum"));
+                auto* Pin = Select->GetIndexPin();
+                Pin->PinType = Index;
+                Select->ChangePinType(Pin);
+            }
             N->NodePosX = Integer(Op, TEXT("x"));
             N->NodePosY = Integer(Op, TEXT("y"));
             N->NodeComment = String(Op, TEXT("comment"), FString(), false);
@@ -1384,7 +1536,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 9);
+    Response->SetNumberField(TEXT("protocol_version"), 10);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }
@@ -1515,13 +1667,20 @@ static void Execute(const FJson& Request, const FJson& Response)
         Require(!FPackageName::DoesPackageExist(Package), TEXT("Asset already exists"));
         const FString Kind = String(Request, TEXT("kind"), TEXT("normal"), false);
         const bool Library = Kind == TEXT("function_library");
-        Require(Kind == TEXT("normal") || Kind == TEXT("animation") || Kind == TEXT("widget") || Library,
-            TEXT("kind must be normal, animation, widget or function_library"));
-        Require(!Library || (!Request->HasField(TEXT("skeleton")) && !Request->HasField(TEXT("template"))),
+        const bool Interface = Kind == TEXT("interface");
+        const bool Macro = Kind == TEXT("macro_library");
+        Require(Kind == TEXT("normal") || Kind == TEXT("animation") || Kind == TEXT("widget") || Library || Interface || Macro,
+            TEXT("Expected normal, animation, widget, function_library, interface or macro_library"));
+        Require(!(Library || Interface || Macro) || (!Request->HasField(TEXT("skeleton")) && !Request->HasField(TEXT("template"))),
             TEXT("skeleton and template are animation creation options"));
-        const FString DefaultParent = Library ? UBlueprintFunctionLibrary::StaticClass()->GetPathName() : TEXT("/Script/Engine.Actor");
+        UClass* DefaultParentClass = AActor::StaticClass();
+        EBlueprintType BlueprintType = BPTYPE_Normal;
+        if (Interface) { DefaultParentClass = UInterface::StaticClass(); BlueprintType = BPTYPE_Interface; }
+        if (Library) { DefaultParentClass = UBlueprintFunctionLibrary::StaticClass(); BlueprintType = BPTYPE_FunctionLibrary; }
+        if (Macro) { BlueprintType = BPTYPE_MacroLibrary; }
+        const FString DefaultParent = DefaultParentClass->GetPathName();
         UClass* Parent = LoadObject<UClass>(nullptr, *String(Request, TEXT("parent_class"), DefaultParent, false));
-        Require(Parent && (Library ? Parent == UBlueprintFunctionLibrary::StaticClass() :
+        Require(Parent && ((Interface || Library) ? Parent == DefaultParentClass :
             FKismetEditorUtilities::CanCreateBlueprintOfClass(Parent)), TEXT("Invalid Blueprint parent class for the requested kind"));
         Require((Kind != TEXT("animation") || Parent->IsChildOf(UAnimInstance::StaticClass())) &&
             (Kind != TEXT("widget") || Parent->IsChildOf(UUserWidget::StaticClass())), TEXT("Parent class must match Blueprint kind"));
@@ -1537,7 +1696,7 @@ static void Execute(const FJson& Request, const FJson& Response)
             FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("UMGEditor"));
             AssetClass = UWidgetBlueprint::StaticClass(); GeneratedClass = UWidgetBlueprintGeneratedClass::StaticClass();
         }
-        BP = FKismetEditorUtilities::CreateBlueprint(Parent, CreatePackage(*Package), FName(*FPackageName::GetLongPackageAssetName(Package)), Library ? BPTYPE_FunctionLibrary : BPTYPE_Normal, AssetClass, GeneratedClass);
+        BP = FKismetEditorUtilities::CreateBlueprint(Parent, CreatePackage(*Package), FName(*FPackageName::GetLongPackageAssetName(Package)), BlueprintType, AssetClass, GeneratedClass);
         if (UAnimBlueprint* Anim = Cast<UAnimBlueprint>(BP))
         {
             Anim->bIsTemplate = Boolean(Request, TEXT("template"));
@@ -1562,9 +1721,9 @@ static void Execute(const FJson& Request, const FJson& Response)
     Require(BP->GetOutermost()->GetName() == Package,
         TEXT("Asset path resolves to another package through a redirector; use the destination Blueprint package path"));
     const bool Library = BP->BlueprintType == BPTYPE_FunctionLibrary && BP->GetClass() == UBlueprint::StaticClass();
-    Require(Library || ((BP->GetClass() == UBlueprint::StaticClass() || BP->GetClass() == UAnimBlueprint::StaticClass() ||
+    Require(Library || (BP->GetClass() == UBlueprint::StaticClass() && (BP->BlueprintType == BPTYPE_Interface || BP->BlueprintType == BPTYPE_MacroLibrary)) || ((BP->GetClass() == UBlueprint::StaticClass() || BP->GetClass() == UAnimBlueprint::StaticClass() ||
         BP->GetClass() == UWidgetBlueprint::StaticClass()) && BP->BlueprintType == BPTYPE_Normal),
-        TEXT("Only normal class, animation, widget and function library Blueprints are supported"));
+        TEXT("Unsupported Blueprint subclass or type"));
     if (Action == TEXT("components"))
     {
         Require(!Library, TEXT("Function libraries have no component templates"));
