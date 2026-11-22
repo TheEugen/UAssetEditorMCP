@@ -352,7 +352,9 @@ def install_plugin(project, source=ROOT, update=False):
         temporary.write_text(json.dumps(descriptor, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, project)
     return {"ok": True, "plugin": str(destination), "project_backup": str(backup),
-            "next": "Build the project's Development Editor target for UE 5.4 before using the tool."}
+            "next": ("Start the MCP server with this project's UE 5.4.4 editor."
+                     if (source / "Binaries/Win64/UnrealEditor-UAssetAgent.dll").is_file()
+                     else "Build the project's Development Editor target for UE 5.4 before using the tool.")}
 
 
 def tool_definitions():

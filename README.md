@@ -28,6 +28,10 @@ a disposable project.
 
 ## Install and build
 
+For Epic Launcher UE 5.4.4 on Windows, download the prebuilt plugin and MCP server, extract the ZIP, and follow the included `INSTALL.md`. [Latest Win64 ZIP](https://github.com/TheEugen/UAssetEditorMCP/releases/latest/download/UAssetEditorMCP-UE5.4.4-Win64.zip) · [Buyer installation](INSTALL.md) · [Release runner setup](docs/releases.md)
+
+### Building from source
+
 Requires UE **5.4**, Python **3.9+**, and Unreal's C++ toolchain (on Windows,
 Visual Studio 2022 with the Unreal/C++ workload and Windows SDK). No pip packages.
 Close the target project's Unreal Editor before installing or editing assets. Read-only queries can run while it is open.
