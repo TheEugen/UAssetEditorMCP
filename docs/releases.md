@@ -22,12 +22,15 @@ Set-Location C:\src\UAssetRelease
 git pull --ff-only origin main
 if ($LASTEXITCODE) { throw 'Could not update the release checkout' }
 $engine = Read-Host 'Epic Launcher UE 5.4.4 installation directory'
-& (Join-Path $engine 'Engine\Binaries\ThirdParty\Python3\Win64\python.exe') -B -X utf8 tools/publish_release.py --engine $engine
+$python = Join-Path $engine 'Engine\Binaries\ThirdParty\Python3\Win64\python.exe'
+& $python .\tools\publish_release.py --engine $engine
 ```
 
 The command verifies that HEAD matches GitHub's current `main` and builds a fresh copy of that exact commit. It runs the unit tests and `build-plugin.ps1`, extracts the ZIP, checks the DLL and module metadata, installs the plugin into a disposable project and calls the packaged server to read `blueprint_protocol`, create a Blueprint and inspect it with Unreal.
 
 The validated ZIP is written to `dist/<full SHA>/UAssetEditorMCP-UE5.4.4-Win64.zip`. The publisher uploads it to a draft, verifies GitHub's size and SHA-256, then publishes the commit-tagged release. An older commit on the same history cannot take Latest from a newer release. If the command fails, fix the reported error and run it again. A retry can repair a draft and preserves the original asset for an already published commit.
+
+If Windows holds a smoke-test log open, the command retries cleanup. A `Cleanup deferred` message identifies a temporary directory you can remove after Windows releases the file. Publication proceeds when validation succeeds.
 
 Check the Latest tag and asset in PowerShell.
 

@@ -7,13 +7,12 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import zipfile
 
-from package_release import ROOT, ZIP_NAME, engine_build_id
+from package_release import ROOT, ZIP_NAME, engine_build_id, release_workspace
 sys.path.insert(0, str(ROOT))
 from uasset_agent import project_lock
 
@@ -127,8 +126,7 @@ def release_main(engine):
     output.mkdir(parents=True, exist_ok=True)
     print(f"Building {REPO} at {sha}", flush=True)
     # An archive of the commit excludes local edits and ignored build products.
-    with tempfile.TemporaryDirectory(dir=ROOT / "dist", prefix="src-") as temp:
-        work = Path(temp)
+    with release_workspace(ROOT / "dist", "src-") as work:
         source = work / "source"
         snapshot = work / "source.zip"
         subprocess.run(["git", "archive", "--format=zip", "-o", str(snapshot), sha], cwd=ROOT, check=True)

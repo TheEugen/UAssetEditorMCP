@@ -1,4 +1,7 @@
+from contextlib import ExitStack
 import hashlib
+import io
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -8,6 +11,32 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from publish_release import publish, release_main, TAG_PREFIX, ZIP_NAME
+from package_release import release_workspace
+
+
+@unittest.skipUnless(os.name == "nt", "requires Windows file sharing semantics")
+class WorkspaceTests(unittest.TestCase):
+    def test_held_log_does_not_block_validated_zip_or_hide_smoke_failure(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as root, ExitStack() as held, \
+                    patch("package_release.time.sleep"), patch("sys.stderr", new_callable=io.StringIO) as log:
+                def build():
+                    with release_workspace(root, "src-") as source:
+                        with release_workspace(source, "verify-") as project:
+                            held.enter_context((project / "process.log").open("wb"))
+                            if fail:
+                                raise ValueError("native smoke failed")
+                            (source / ZIP_NAME).write_bytes(b"validated")
+                        (source / ZIP_NAME).replace(Path(root) / ZIP_NAME)
+
+                if fail:
+                    with self.assertRaisesRegex(ValueError, "native smoke failed"):
+                        build()
+                    self.assertFalse((Path(root) / ZIP_NAME).exists())
+                else:
+                    build()
+                    self.assertEqual((Path(root) / ZIP_NAME).read_bytes(), b"validated")
+                self.assertIn("Cleanup deferred", log.getvalue())
 
 
 class PublicationTests(unittest.TestCase):

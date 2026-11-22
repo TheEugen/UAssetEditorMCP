@@ -1,5 +1,6 @@
 """Build, extract and exercise the Win64 buyer bundle with the specified UE editor."""
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,26 @@ CLIENT_FILES = ("uasset_agent.py", "blueprint_diff.py", "configure_codex.py", "d
 
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+@contextmanager
+def release_workspace(parent, prefix):
+    temp = tempfile.TemporaryDirectory(dir=parent, prefix=prefix)
+    try:
+        yield Path(temp.name).resolve()
+    finally:
+        # Unreal helpers can retain a log handle after the editor exits.
+        for delay in (0, 0.25, 1, 2):
+            if delay:
+                time.sleep(delay)
+            try:
+                temp.cleanup()
+                break
+            except OSError as error:
+                if getattr(error, "winerror", None) not in (32, 33):
+                    raise
+        else:
+            print(f"Cleanup deferred: Windows still has a file open in {temp.name}", file=sys.stderr)
 
 
 def engine_build_id(engine, local_smoke):
@@ -101,8 +123,7 @@ def main():
     engine = args.engine.resolve(strict=True)
     build_id = engine_build_id(engine, args.local_smoke)
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=args.output, prefix="verify-") as tmp:
-        work = Path(tmp).resolve()
+    with release_workspace(args.output, "verify-") as work:
         plugin = work / "plugin"
         subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                         str(ROOT / "build-plugin.ps1"), "-EngineRoot", str(engine),
