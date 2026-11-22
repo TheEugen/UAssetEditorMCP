@@ -1,0 +1,20 @@
+{
+  "action": "apply",
+  "asset": "/Game/Example/BP_Caller",
+  "expected_revision": "<revision from inspect>",
+  "dry_run": true,
+  "operations": [
+    {
+      "op": "retarget_call",
+      "graph": "ReadCaller",
+      "node": "<GUID from graph inspection>",
+      "class": "/Game/Example/BFL_Replacement.BFL_Replacement_C",
+      "function": "NewRead",
+      "pin_map": {
+        "Amount": "Quantity",
+        "Adjust": "Offset",
+        "Value": "Result"
+      }
+    }
+  ]
+}

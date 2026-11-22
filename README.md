@@ -22,6 +22,19 @@ properties and a revision. Use `blueprint_asset_apply` to update a property or
 array element and `blueprint_asset_create` to create a data asset. Both preview
 by default. Blueprint edits also support `repair: true` for compile errors.
 
+To repair a Blueprint, inspect its revision and compile the affected package to
+identify the error. Preview a targeted `apply` with `repair: true`. The response
+records the starting compile status and messages in `initial_compile_ok` and
+`initial_diagnostics`. A missing parent requires a compatible `reparent` as the
+first operation. A save requires the final compile to succeed. After saving,
+inspect the repaired member or graph and compile the package in a fresh call.
+
+For an ordinary call node whose replacement function renames pins, adapt the
+[retarget preview](examples/retarget_call.preview.json). Substitute the caller's
+revision, node GUID and replacement generated class. The example maps two
+inputs and an output. After saving, inspect the same GUID and compare the
+replacement function, connected endpoints and edited input values.
+
 The Win64 plugin has been built with UE 5.4.4. Rebuild the
 plugin before using the new requests and run the relevant integration suite in
 a disposable project.
