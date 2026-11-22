@@ -2,6 +2,8 @@
 """Dependency-free CLI and MCP server for the UE 5.4 UAssetAgent commandlet."""
 from __future__ import annotations
 
+from blueprint_diff import compare_blueprints
+
 import argparse
 from contextlib import contextmanager
 import json
@@ -35,8 +37,16 @@ def validate_request(request):
     action = request.get("action")
     if "repair" in request and (action != "apply" or not isinstance(request["repair"], bool)):
         raise AgentError("repair must be a boolean on apply")
-    if not isinstance(action, str) or action not in {"list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "asset_inspect", "asset_apply", "asset_create", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path", "replace_references"}:
+    if not isinstance(action, str) or action not in {"diff", "list", "inspect", "functions", "apply", "create", "compile", "components", "redirectors", "delete_asset", "fixup_redirectors", "asset_inspect", "asset_apply", "asset_create", "material_inspect", "material_apply", "level_inspect", "level_apply", "references", "find_path", "replace_references"}:
         raise AgentError("Unknown action; read blueprint_protocol for supported actions")
+    if action == "diff":
+        for key in ("a", "b"):
+            source = request.get(key)
+            if not isinstance(source, str) or not (source.startswith("/Game/") or source.lower().endswith(".uasset")):
+                raise AgentError("diff requires a and b as /Game packages or MCP backup files")
+        redirects = request.get("normalize_paths", {})
+        if not isinstance(redirects, dict) or any(not isinstance(path, str) or not path.startswith("/") or not path.endswith("/") for pair in redirects.items() for path in pair):
+            raise AgentError("normalize_paths maps slash-terminated folder prefixes")
     if action in {"list", "compile", "redirectors", "fixup_redirectors"}:
         path = request.get("path", "/Game")
         if (not isinstance(path, str) or not (path == "/Game" or path.startswith("/Game/")) or
@@ -292,6 +302,9 @@ class Client:
             response["logs"] = str(run_dir)
             if result.returncode != 0 and response["ok"]:
                 response.update(ok=False, error=f"Unreal exited with code {result.returncode} after writing a response; inspect saved state before retrying")
+            if request["action"] == "diff" and response["ok"]:
+                response["changes"] = compare_blueprints(response.pop("a"), response.pop("b"), request.get("normalize_paths", {}))
+                response["identical"] = not response["changes"]
             return response
 
 
@@ -346,6 +359,8 @@ def tool_definitions():
     definitions = []
     specs = [
         ("blueprint_list", "List Blueprint assets under /Game.", {"path": {"type": "string"}}, []),
+        ("blueprint_diff", "Compare two Blueprint packages or MCP backups, matching nodes by GUID. Includes variables, class defaults, components, pins and links.",
+         {"a": {"type": "string"}, "b": {"type": "string"}, "normalize_paths": {"type": "object", "additionalProperties": {"type": "string"}}}, ["a", "b"]),
         ("blueprint_asset_inspect", "Inspect a saved non-Blueprint asset's class, editable properties in Unreal text format, and revision.",
          {"asset": asset}, ["asset"]),
         ("blueprint_asset_apply", "Edit reflected properties and array elements on a non-Blueprint asset. Defaults to a dry run.",

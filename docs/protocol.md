@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 8
+# UAsset Agent JSON protocol, version 9
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -858,3 +858,7 @@ Use `blueprint_asset_inspect`, `blueprint_asset_apply` and `blueprint_asset_crea
 ```
 
 Both write actions preview by default. Repeat with `dry_run:false` to persist. Updates require a single writable package and return a backup under `backups`. Creation requires a new package path and a concrete data asset class (including a generated data asset class) or a matching editor factory that can create its asset unattended. Creation accepts an optional array of operations following the initial properties. Supply values as Unreal text strings. Use the Blueprint and level tools for graph and map edits.
+
+### Blueprint diff
+
+Call `blueprint_diff` with `a` and `b`. Either may be a /Game package or an absolute .uasset file under this project's Saved/UAssetAgent/Backups directory. Optional `normalize_paths` maps folder prefixes such as `{"/Game/Older/":"/Game/Newer/"}`. The response contains `identical` and ordered changes with a path, change kind, and before/after values. Node paths contain their GUID.

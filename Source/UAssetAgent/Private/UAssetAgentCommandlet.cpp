@@ -3,6 +3,10 @@
 #include "Algo/Find.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Dom/JsonObject.h"
+#include "DiffUtils.h"
+#include "Misc/PackagePath.h"
+#include "Misc/ScopeExit.h"
+#include "UObject/PackageFileSummary.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraphSchema_K2.h"
@@ -1328,6 +1332,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 }
 
 #include "UAssetAgentMaintenance.inl"
+#include "UAssetAgentDiff.inl"
 #include "UAssetAgentAssets.inl"
 #include "UAssetAgentMaterials.inl"
 #include "UAssetAgentLevels.inl"
@@ -1379,11 +1384,12 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 8);
+    Response->SetNumberField(TEXT("protocol_version"), 9);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }
     if (Action == TEXT("replace_references")) { ReplaceReferencesAction(Request, Response); return; }
+    if (Action == TEXT("diff")) { DiffInputAction(Request, Response); return; }
     if (Action == TEXT("references") || Action == TEXT("find_path"))
     { ReferenceAction(Request, Response, Action == TEXT("find_path")); return; }
     if (Action == TEXT("level_inspect") || Action == TEXT("level_apply"))
