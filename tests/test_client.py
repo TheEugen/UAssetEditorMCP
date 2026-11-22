@@ -45,7 +45,7 @@ class ClientTests(unittest.TestCase):
             result = self.client.execute({"action": "inspect", "asset": "/Game/Players/BP_Player"})
         self.assertFalse(result["ok"])
         self.assertEqual(result["operation_index"], 2)
-        self.assertEqual(captured[0][1], str(self.project))
+        self.assertEqual(captured[0][1], str(self.project.resolve()))
         self.assertTrue(Path(result["logs"]).is_dir())
 
     def test_compile_and_response_options_are_validated_before_launch(self):
