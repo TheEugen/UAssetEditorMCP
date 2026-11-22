@@ -1,3 +1,5 @@
+#include "PackageTools.h"
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAssetAgentReplaceReferencesTest, "UAssetAgent.ScopedReplaceReferences",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -80,7 +82,23 @@ bool FUAssetAgentReplaceReferencesTest::RunTest(const FString& Parameters)
         const FString OldRevision = Revision(AssetFilename(Old));
         const FString NewRevision = Revision(AssetFilename(New));
         const FString OutsideRevision = Revision(AssetFilename(Outside));
-        CollectGarbage(RF_NoFlags);
+        // Production requests run in separate processes. Discard only these
+        // disposable packages between requests, including unsaved previews.
+        const auto UnloadFixtures = [&]()
+        {
+            TArray<UPackage*> Packages;
+            for (const FString& Name : {Ship, Outside, Map, Old, New, Missing})
+            {
+                if (UPackage* Loaded = FindPackage(nullptr, *Name)) { Packages.Add(Loaded); }
+            }
+            if (!Packages.IsEmpty())
+            {
+                FText Error;
+                if (!UPackageTools::UnloadPackages(Packages, Error, true))
+                { throw FFailure{TEXT("Could not unload fixture packages: ") + Error.ToString()}; }
+            }
+        };
+        UnloadFixtures();
 
         const auto RequestFor = [&](const FString& Target)
         {
@@ -96,7 +114,7 @@ bool FUAssetAgentReplaceReferencesTest::RunTest(const FString& Parameters)
         catch (const FFailure&) { Rejected = true; }
         TestTrue(TEXT("Missing target member or call rejects replacement"), Rejected);
         TestEqual(TEXT("Failure leaves ship bytes intact"), Revision(AssetFilename(Ship)), ShipRevision);
-        CollectGarbage(RF_NoFlags);
+        UnloadFixtures();
 
         FJson Request = RequestFor(New);
         FJson Preview = MakeShared<FJsonObject>();
@@ -115,7 +133,7 @@ bool FUAssetAgentReplaceReferencesTest::RunTest(const FString& Parameters)
         Require(Excluded.Num() == 1 && Excluded[0]->AsString() == Map, TEXT("Expected the map to be excluded"));
         const auto Compiles = Array(AsObject(Reports[0]), TEXT("compiles"), true);
         Require(Compiles.Num() == 1 && AsObject(Compiles[0])->GetBoolField(TEXT("ok")), TEXT("Scoped Blueprint compile did not pass"));
-        CollectGarbage(RF_NoFlags);
+        UnloadFixtures();
 
         Request->SetBoolField(TEXT("dry_run"), false);
         Request->SetObjectField(TEXT("expected_revisions"), Object(Preview, TEXT("revisions")));
@@ -126,7 +144,7 @@ bool FUAssetAgentReplaceReferencesTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Source asset retained"), Revision(AssetFilename(Old)), OldRevision);
         TestEqual(TEXT("Destination asset retained"), Revision(AssetFilename(New)), NewRevision);
         TestEqual(TEXT("Out-of-scope asset retained"), Revision(AssetFilename(Outside)), OutsideRevision);
-        CollectGarbage(RF_NoFlags);
+        UnloadFixtures();
         Registry.ScanFilesSynchronous({AssetFilename(Ship)}, true);
         const auto Dependencies = PackageReferences(Registry, FName(*Ship), false, true);
         TestTrue(TEXT("Saved ship depends on the replacement"), Dependencies.Contains(FName(*New)));

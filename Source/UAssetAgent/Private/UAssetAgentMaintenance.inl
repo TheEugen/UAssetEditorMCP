@@ -53,8 +53,9 @@ static FString MaintenanceFile(IAssetRegistry& Registry, const FString& Package)
     Require(!IFileManager::Get().FileExists(*FPaths::ChangeExtension(Filename, TEXT("uexp"))) &&
         !IFileManager::Get().FileExists(*FPaths::ChangeExtension(Filename, TEXT("ubulk"))), TEXT("Split packages are not supported"));
     TArray<FAssetData> Assets;
+    Registry.ScanFilesSynchronous({Filename}, true);
     Registry.GetAssetsByPackageName(FName(*Package), Assets, true);
-    Require(Assets.Num() == 1 && !(Assets[0].PackageFlags & PKG_ContainsMap), TEXT("Maintenance requires single-asset, non-map packages: ") + Package);
+    Require(Assets.Num() == 1 && !(Assets[0].PackageFlags & PKG_ContainsMap), FString::Printf(TEXT("Maintenance requires a single-asset, non-map package: %s (%d registry entries)"), *Package, Assets.Num()));
     return Filename;
 }
 

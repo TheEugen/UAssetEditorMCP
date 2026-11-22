@@ -36,7 +36,8 @@ bool FUAssetAgentPlacedActorsTest::RunTest(const FString& Parameters)
             IFileManager::Get().MakeDirectory(*FPaths::GetPath(Filename), true);
             Require(UPackage::SavePackage(MapPackage, World, *Filename, Save), TEXT("Cannot save test map"));
             World->DestroyWorld(false);
-            CollectGarbage(RF_NoFlags);
+            // Purge the destroyed world while preserving standalone editor assets from other tests.
+            CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 
             const auto Request = [&](const TCHAR* Body)
             {
@@ -50,7 +51,7 @@ bool FUAssetAgentPlacedActorsTest::RunTest(const FString& Parameters)
                 FJson Command = Request(TEXT("{\"action\":\"level_inspect\"}"));
                 Command->SetStringField(TEXT("search"), Search);
                 Execute(Command, Response);
-                CollectGarbage(RF_NoFlags);
+                CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
                 return Response;
             };
             const auto Apply = [&](const TCHAR* Body, const FString& Revision)
@@ -69,7 +70,7 @@ bool FUAssetAgentPlacedActorsTest::RunTest(const FString& Parameters)
                     if (IFileManager::Get().FileExists(*External)) { Registry.ScanFilesSynchronous({External}, true); }
                     else if (UPackage* Removed = FindPackage(nullptr, *ChangedPackage)) { Registry.PackageDeleted(Removed); }
                 }
-                CollectGarbage(RF_NoFlags);
+                CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
                 return Response;
             };
             FJson Before = Inspect(TEXT("DockStart"));

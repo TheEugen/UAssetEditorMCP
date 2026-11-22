@@ -117,7 +117,9 @@ bool FUAssetAgentComponentTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Reject missing property"), Rejected(ChildEditor, Json(TEXT("{\"op\":\"set_component_default\",\"component\":\"Hull\",\"property\":\"NoSuchProperty\",\"value\":\"1\"}"))));
         UBlueprint* Native = Blueprint(Root + TEXT("/BP_Native"), ACharacter::StaticClass());
         FEditor NativeEditor(Native, MakeShared<FJsonObject>());
-        NativeEditor.Apply(Json(TEXT("{\"op\":\"set_component_default\",\"component\":\"native:CapsuleComponent\",\"property\":\"CapsuleRadius\",\"value\":\"55\"}")));
+        FJson Edit = Json(TEXT(R"({"op":"set_component_default","property":"CapsuleRadius","value":"55"})"));
+        Edit->SetStringField(TEXT("component"), TEXT("native:") + ACharacter::CapsuleComponentName.ToString());
+        NativeEditor.Apply(Edit);
         Require(NativeEditor.CompileCurrent(), TEXT("Native component edit did not compile"));
         TestEqual(TEXT("Native component value survives compile"), CastChecked<ACharacter>(Native->GeneratedClass->GetDefaultObject())->GetCapsuleComponent()->GetUnscaledCapsuleRadius(), 55.0f);
     }
@@ -256,9 +258,9 @@ bool FUAssetAgentRedirectorTest::RunTest(const FString& Parameters)
     try
     {
         const FString Root = TestRoot();
-        auto Data = [&](const TCHAR* Name) { return NewObject<UDataAsset>(CreatePackage(*(Root + TEXT("/") + Name)), Name, RF_Public | RF_Standalone); };
+        auto Data = [&](const TCHAR* Name) { return NewObject<UCurveFloat>(CreatePackage(*(Root + TEXT("/") + Name)), Name, RF_Public | RF_Standalone); };
         auto Redirector = [&](const TCHAR* Name) { return NewObject<UObjectRedirector>(CreatePackage(*(Root + TEXT("/") + Name)), Name, RF_Public | RF_Standalone); };
-        UDataAsset* Target = Data(TEXT("Target")); Save(Target);
+        UCurveFloat* Target = Data(TEXT("Target")); Save(Target);
         UObjectRedirector* Good = Redirector(TEXT("Good")); Good->DestinationObject = Target; Save(Good);
         UObjectRedirector* Chain = Redirector(TEXT("Chain")); Chain->DestinationObject = Good; Save(Chain);
         UObjectRedirector* Broken = Redirector(TEXT("Broken")); Broken->DestinationObject = Data(TEXT("UnsavedTarget")); Save(Broken);

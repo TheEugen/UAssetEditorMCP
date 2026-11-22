@@ -115,7 +115,7 @@ bool ApplyV2(const FJson& Op)
                 Require(Function && FBlueprintEditorUtils::HasFunctionBlueprintThreadSafeMetaData(Function), TEXT("Function must exist and be BlueprintThreadSafe"));
                 FProperty* BindingProperty = FindFProperty<FProperty>(Anim->GetClass(), FName(*Slot));
                 const FString PrototypePath = BindingProperty->GetMetaData(TEXT("PrototypeFunction"));
-                UFunction* Prototype = LoadObject<UFunction>(nullptr, *PrototypePath);
+                UFunction* Prototype = FindObject<UFunction>(nullptr, *PrototypePath);
                 Require(Prototype && Prototype->IsSignatureCompatibleWith(Function), TEXT("Function signature must match the animation update prototype (context and node reference)"));
                 Reference->SetFromField<UFunction>(Function, true);
             }

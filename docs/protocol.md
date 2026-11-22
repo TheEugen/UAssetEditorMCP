@@ -276,7 +276,7 @@ format. Full Blueprint inspection also includes these; summaries omit defaults.
 
 ```json
 {"op":"set_component_default","component":"Hull","property":"RelativeLocation","value":"(X=0,Y=0,Z=25)"}
-{"op":"set_component_default","component":"native:CapsuleComponent","property":"CapsuleRadius","value":"55"}
+{"op":"set_component_default","component":"native:CollisionCylinder","property":"CapsuleRadius","value":"55"}
 ```
 
 Use the component `id` from inspection, or a unique component name. Local SCS

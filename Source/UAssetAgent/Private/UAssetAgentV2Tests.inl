@@ -181,7 +181,7 @@ bool FUAssetAgentV2AnimationTest::RunTest(const FString& Parameters)
         // Build a real thread-safe Blueprint function from UE's exact prototype.
         BP = Fixtures.Create(TEXT("ABP_Nodes"), TEXT("animation"));
         Editor = FEditor(BP, MakeShared<FJsonObject>());
-        UFunction* Prototype = LoadObject<UFunction>(nullptr, TEXT("/Script/AnimGraphRuntime.AnimExecutionContextLibrary.Prototype_ThreadSafeAnimUpdateCall"));
+        UFunction* Prototype = FindObject<UFunction>(nullptr, TEXT("/Script/AnimGraphRuntime.AnimExecutionContextLibrary.Prototype_ThreadSafeAnimUpdateCall"));
         Require(Prototype != nullptr, TEXT("Missing animation update prototype"));
         UEdGraph* Function = FBlueprintEditorUtils::CreateNewGraph(BP, TEXT("TestUpdate"), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
         FBlueprintEditorUtils::AddFunctionGraph<UFunction>(BP, Function, true, Prototype);
