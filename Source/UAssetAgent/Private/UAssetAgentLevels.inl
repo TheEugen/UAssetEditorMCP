@@ -60,6 +60,18 @@ static FVector LevelVector(const FJson& Json, const TCHAR* Field, const FVector&
     return FVector(Components[0], Components[1], Components[2]);
 }
 
+static FJson DescribeLevelTransform(const AActor* Actor)
+{
+    const FVector Location = Actor->GetActorLocation();
+    const FRotator Rotation = Actor->GetActorRotation();
+    const FVector Scale = Actor->GetActorScale3D();
+    FJson Transform = MakeShared<FJsonObject>();
+    Transform->SetArrayField(TEXT("location"), LevelVector(Location.X, Location.Y, Location.Z));
+    Transform->SetArrayField(TEXT("rotation"), LevelVector(Rotation.Pitch, Rotation.Yaw, Rotation.Roll));
+    Transform->SetArrayField(TEXT("scale"), LevelVector(Scale.X, Scale.Y, Scale.Z));
+    return Transform;
+}
+
 static FJson DescribeLevelActor(AActor* Actor)
 {
     FJson Item = MakeShared<FJsonObject>();
@@ -68,14 +80,7 @@ static FJson DescribeLevelActor(AActor* Actor)
     Item->SetStringField(TEXT("label"), Actor->GetActorLabel());
     Item->SetStringField(TEXT("class"), Actor->GetClass()->GetPathName());
     Item->SetStringField(TEXT("package"), Actor->GetPackage()->GetName());
-    const FVector Location = Actor->GetActorLocation();
-    const FRotator Rotation = Actor->GetActorRotation();
-    const FVector Scale = Actor->GetActorScale3D();
-    FJson Transform = MakeShared<FJsonObject>();
-    Transform->SetArrayField(TEXT("location"), LevelVector(Location.X, Location.Y, Location.Z));
-    Transform->SetArrayField(TEXT("rotation"), LevelVector(Rotation.Pitch, Rotation.Yaw, Rotation.Roll));
-    Transform->SetArrayField(TEXT("scale"), LevelVector(Scale.X, Scale.Y, Scale.Z));
-    Item->SetObjectField(TEXT("transform"), Transform);
+    Item->SetObjectField(TEXT("transform"), DescribeLevelTransform(Actor));
     TArray<FString> Tags;
     for (FName Tag : Actor->Tags) { Tags.Add(Tag.ToString()); }
     Item->SetArrayField(TEXT("tags"), LevelStrings(Tags));
@@ -136,6 +141,55 @@ static AActor* SelectLevelActor(const TArray<AActor*>& Actors, const FString& Se
     }
     Require(Found != nullptr, TEXT("Actor not found: ") + Selector);
     return Found;
+}
+
+static void MoveLevelActor(AActor* Actor, const TArray<AActor*>& Actors, const FJson& Op, const FJson& Result,
+    TMap<UPackage*, UObject*>& Changes)
+{
+    Require(Op->HasField(TEXT("location")) || Op->HasField(TEXT("rotation")) || Op->HasField(TEXT("scale")),
+        TEXT("set_actor_transform requires location, rotation or scale"));
+    USceneComponent* Root = Actor->GetRootComponent();
+    Require(Root != nullptr, TEXT("Actor has no root component: ") + Actor->GetName());
+    const FTransform Current = Actor->GetActorTransform();
+    FTransform Transform = Current;
+    Transform.SetLocation(LevelVector(Op, TEXT("location"), Current.GetLocation()));
+    Transform.SetScale3D(LevelVector(Op, TEXT("scale"), Current.GetScale3D()));
+    if (Op->HasField(TEXT("rotation")))
+    {
+        const FVector Rotation = LevelVector(Op, TEXT("rotation"), FVector::ZeroVector);
+        Transform.SetRotation(FRotator(Rotation.X, Rotation.Y, Rotation.Z).Quaternion());
+    }
+    TArray<AActor*> Dependencies;
+    for (const auto& Value : Array(Op, TEXT("rerun_construction")))
+    {
+        FString Selector;
+        Require(Value->TryGetString(Selector) && !Selector.IsEmpty(), TEXT("rerun_construction requires actor selectors"));
+        AActor* Dependency = SelectLevelActor(Actors, Selector);
+        if (Dependency != Actor) { Dependencies.AddUnique(Dependency); }
+    }
+    Actor->Modify();
+    Root->Modify();
+    Actor->SetActorTransform(Transform, false, nullptr, ETeleportType::TeleportPhysics);
+    Require(Actor->GetActorTransform().Equals(Transform), TEXT("Could not set the actor's world transform: ") + Actor->GetName());
+    // Unreal's completed editor move reruns construction and restores component instance data.
+    Actor->PostEditMove(true);
+    TArray<TSharedPtr<FJsonValue>> Rerun;
+    for (AActor* Dependency : Dependencies)
+    {
+        Require(IsValid(Dependency), TEXT("Construction invalidated a dependent actor"));
+        Dependency->Modify();
+        Dependency->RerunConstructionScripts();
+        Require(IsValid(Dependency), TEXT("Dependent actor is no longer valid after construction"));
+        Changes.Add(Dependency->GetPackage(), Dependency);
+        FJson Item = MakeShared<FJsonObject>();
+        Item->SetStringField(TEXT("guid"), Guid(Dependency->GetActorGuid()));
+        Item->SetObjectField(TEXT("transform"), DescribeLevelTransform(Dependency));
+        Rerun.Add(JsonValue(Item));
+    }
+    Require(IsValid(Actor) && Actor->GetActorTransform().Equals(Transform),
+        TEXT("Construction changed the requested world transform"));
+    Result->SetObjectField(TEXT("transform"), DescribeLevelTransform(Actor));
+    Result->SetArrayField(TEXT("rerun_construction"), Rerun);
 }
 
 static UClass* LevelActorClass(const FJson& Op, const FJson& Result)
@@ -426,6 +480,8 @@ static void LevelAction(const FJson& Request, const FJson& Response, bool Apply)
             Actor->PostEditMove(true);
             Actors.Add(Actor);
         }
+        else if (Kind == TEXT("set_actor_transform"))
+        { MoveLevelActor(Actor, Actors, Op, Result, Changes); }
         else if (Kind == TEXT("set_actor_property"))
         {
             const FString Name = String(Op, TEXT("property"));

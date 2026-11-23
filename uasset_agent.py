@@ -386,7 +386,7 @@ def tool_definitions():
             "dry_run": {"type": "boolean", "default": True}}, ["asset", "expected_revision", "operations"]),
         ("blueprint_level_inspect", "Inspect placed actors in a map's persistent level, including World Partition actors. Returns GUIDs, transforms, tags, instance property overrides, referenced assets and a revision.", {
             "asset": asset, "search": {"type": "string", "description": "Match actor name, label, class path or GUID."}}, ["asset"]),
-        ("blueprint_level_apply", "Replace, spawn, delete or edit placed actors, including World Partition actors. Defaults to a dry run. Use the revision from level inspection and read blueprint_protocol for operations.", {
+        ("blueprint_level_apply", "Move, replace, spawn, delete or edit placed actors, including World Partition actors. Defaults to a dry run. Use the revision from level inspection and read blueprint_protocol for operations.", {
             "asset": asset, "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
             "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
             "dry_run": {"type": "boolean", "default": True}}, ["asset", "expected_revision", "operations"]),

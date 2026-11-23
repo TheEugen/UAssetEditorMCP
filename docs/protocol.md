@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 12
+# UAsset Agent JSON protocol, version 13
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -719,6 +719,7 @@ degrees and scale as three numbers each.
   "operations":[
     {"op":"replace_actor_class","actor":"BP_Ocean_Time_0","class":"/Game/Ocean/BP_Ocean_Time.BP_Ocean_Time_C"},
     {"op":"set_actor_property","actor":"BuoyancySolver","property":"BuoyancyDataset","value":"/Game/Ocean/DA_Buoyancy.DA_Buoyancy"},
+    {"op":"set_actor_transform","actor":"BP_Waterline_Ocean_Gen_4","location":[100,200,1750],"rerun_construction":["BuoyancySolver"]},
     {"op":"spawn_actor","class":"/Script/Engine.TargetPoint","name":"DockTarget","transform":{"location":[100,200,300],"rotation":[0,90,0],"scale":[1,1,1]}},
     {"op":"set_tags","actor":"DockTarget","tags":["Dock","Spawn"]},
     {"op":"delete_actor","actor":"OldTarget"}
@@ -728,6 +729,12 @@ degrees and scale as three numbers each.
 
 Replacement keeps the actor name, GUID, transform, tags and same-type
 editable property overrides. The result identifies copied and skipped overrides.
+`set_actor_transform` edits a placed actor in world space. Supply at least one
+of `location`, `rotation` or `scale`. Omitted fields keep their current values.
+The editor move uses the existing actor and its attachment and instance data.
+It runs the actor's construction script using Unreal's completed-move behavior.
+Use `rerun_construction` for dependent actors. Their packages are included in
+the same save, and the operation returns their GUIDs and resulting transforms.
 The tool checks loaded references for incompatible actor types and compiles
 the new Blueprint class and any modified level script. Dry runs are the
 default. A save backs up changed existing packages under

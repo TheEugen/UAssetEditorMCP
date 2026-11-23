@@ -80,7 +80,8 @@ bool FUAssetAgentPlacedActorsTest::RunTest(const FString& Parameters)
                 {"op":"spawn_actor","class":"/Script/Engine.PlayerStart","name":"DockStart",
                  "transform":{"location":[10,20,30],"rotation":[0,90,0],"scale":[1,1,1]}},
                 {"op":"set_actor_property","actor":"DockStart","property":"PlayerStartTag","value":"Dock"},
-                {"op":"set_tags","actor":"DockStart","tags":["Dock","Start"]}
+                {"op":"set_tags","actor":"DockStart","tags":["Dock","Start"]},
+                {"op":"spawn_actor","class":"/Script/Engine.TargetPoint","name":"OceanSolver"}
             ]})json");
             const FString StartRevision = String(Before, TEXT("revision"));
             TestFalse(TEXT("Default dry run leaves disk untouched"), Apply(Spawn, StartRevision)->GetBoolField(TEXT("saved")));
@@ -104,9 +105,43 @@ bool FUAssetAgentPlacedActorsTest::RunTest(const FString& Parameters)
             catch (const FFailure& Error) { StaleRejected = Error.Message == TEXT("Revision conflict"); }
             TestTrue(TEXT("Stale map revision rejected"), StaleRejected);
 
+            const TCHAR* Move = TEXT(R"json({"action":"level_apply","operations":[
+                {"op":"set_actor_transform","actor":"DockStart","location":[10,20,1750],
+                 "rerun_construction":["OceanSolver"]}
+            ]})json");
+            const FJson MovePreview = Apply(Move, FirstRevision);
+            TestFalse(TEXT("Transform preview leaves disk untouched"), MovePreview->GetBoolField(TEXT("saved")));
+            TestEqual(TEXT("Transform preview preserves revision"), String(Inspect(TEXT("DockStart")), TEXT("revision")), FirstRevision);
+            FString SaveMove(Move);
+            SaveMove.InsertAt(1, TEXT("\"dry_run\":false,"));
+            const FJson Moved = Apply(*SaveMove, FirstRevision);
+            Require(Moved->GetBoolField(TEXT("saved")), TEXT("Transform did not save"));
+            const FJson ReadMoved = Inspect(TEXT("DockStart"));
+            const auto MovedActors = Array(ReadMoved, TEXT("actors"), true);
+            Require(MovedActors.Num() == 1, TEXT("Moved actor did not reload"));
+            const FJson MovedActor = AsObject(MovedActors[0]);
+            const FJson Transform = Object(MovedActor, TEXT("transform"));
+            TestEqual(TEXT("Moved actor retains its GUID"), String(MovedActor, TEXT("guid")), String(First, TEXT("guid")));
+            TestEqual(TEXT("Moved actor retains its spawn tag"), String(Object(MovedActor, TEXT("instance_properties")), TEXT("PlayerStartTag")), FString(TEXT("Dock")));
+            TestEqual(TEXT("Moved actor retains actor tags"), Array(MovedActor, TEXT("tags"), true).Num(), 2);
+            TestTrue(TEXT("Moved actor retains its yaw"), FMath::IsNearlyEqual(Array(Transform, TEXT("rotation"), true)[1]->AsNumber(), 90.0));
+            TestEqual(TEXT("Moved actor retains its scale"), Array(Transform, TEXT("scale"), true)[2]->AsNumber(), 1.0);
+            TestEqual(TEXT("Moved actor's world Z persists"), Array(Transform, TEXT("location"), true)[2]->AsNumber(), 1750.0);
+            TestTrue(TEXT("Transform save backs up the edited actor"), Object(Moved, TEXT("backups"))->HasField(ActorPackage));
+            const auto Solvers = Array(Inspect(TEXT("OceanSolver")), TEXT("actors"), true);
+            Require(Solvers.Num() == 1, TEXT("Dependent actor did not reload"));
+            const FJson Solver = AsObject(Solvers[0]);
+            const FJson MoveResult = AsObject(Array(Moved, TEXT("operations"), true)[0]);
+            const auto Reruns = Array(MoveResult, TEXT("rerun_construction"), true);
+            Require(Reruns.Num() == 1, TEXT("Expected one dependency to rerun construction"));
+            const FJson Rerun = AsObject(Reruns[0]);
+            TestEqual(TEXT("Requested construction rerun identifies the dependency"), String(Rerun, TEXT("guid")), String(Solver, TEXT("guid")));
+            TestTrue(TEXT("Transform save backs up the rerun dependency"),
+                Object(Moved, TEXT("backups"))->HasField(String(Solver, TEXT("package"))));
+
             FJson Replacement = Apply(TEXT(R"json({"action":"level_apply","dry_run":false,"operations":[
                 {"op":"replace_actor_class","actor":"DockStart","class":"/Script/Engine.TargetPoint"}
-            ]})json"), FirstRevision);
+            ]})json"), String(ReadMoved, TEXT("revision")));
             Require(Replacement->GetBoolField(TEXT("saved")), TEXT("Replacement did not save"));
             FJson ReadReplacement = Inspect(TEXT("DockStart"));
             const auto ReplacementActors = Array(ReadReplacement, TEXT("actors"), true);
