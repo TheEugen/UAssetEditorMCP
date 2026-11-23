@@ -53,6 +53,7 @@
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Logging/TokenizedMessage.h"
+#include "Misc/DataValidation.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -576,6 +577,8 @@ struct FNodeFilter
     }
 };
 
+#include "UAssetAgentOwnedObjects.inl"
+
 static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
 {
     const FString Mode = String(Request, TEXT("response_mode"), TEXT("full"), false);
@@ -711,6 +714,8 @@ static FJson DescribeBlueprint(UBlueprint* BP, const FJson& Request)
     if (BP->GeneratedClass)
     {
         UObject* CDO = BP->GeneratedClass->GetDefaultObject();
+        FJson Slots = DescribeOwnedSlots(CDO);
+        if (!Slots->Values.IsEmpty()) { J->SetObjectField(TEXT("default_subobjects"), Slots); }
         for (TFieldIterator<FProperty> It(BP->GeneratedClass); It; ++It)
         {
             if (!It->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)) { continue; }
@@ -1536,7 +1541,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 10);
+    Response->SetNumberField(TEXT("protocol_version"), 11);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }
@@ -1792,10 +1797,13 @@ static void Execute(const FJson& Request, const FJson& Response)
             if (!LibrarySignatures.IsEmpty()) { LibraryCallers = FindLibraryCallers(BP, LibrarySignatures); }
         }
     }
+    TArray<int32> OwnedObjectOperations;
     for (int32 I = 0; I < Operations.Num(); ++I)
     {
         Response->SetNumberField(TEXT("operation_index"), I);
-        Editor.Apply(AsObject(Operations[I]));
+        FJson Op = AsObject(Operations[I]);
+        if (IsOwnedObjectOperation(String(Op, TEXT("op")))) { OwnedObjectOperations.Add(I); }
+        else { Editor.Apply(Op); }
     }
     Response->RemoveField(TEXT("operation_index"));
     if (Editor.bRefreshAfterBatch) { FBlueprintEditorUtils::RefreshAllNodes(BP); }
@@ -1805,6 +1813,22 @@ static void Execute(const FJson& Request, const FJson& Response)
     { Editor.SetDefault(String(Op, TEXT("property")), ValueString(Op, TEXT("value"))); }
     if (!Editor.DeferredDefaults.IsEmpty())
     { Require(Editor.CompileCurrent(), TEXT("Blueprint compilation failed after setting defaults; no asset was saved")); }
+    if (!OwnedObjectOperations.IsEmpty())
+    {
+        Require(BlueprintKind(BP) == TEXT("normal"), TEXT("Owned subobject editing requires a normal Blueprint"));
+        Require(Action == TEXT("create") || Request->HasField(TEXT("expected_revision")),
+            TEXT("Owned subobject editing requires expected_revision from inspection"));
+        Require(BP->GeneratedClass != nullptr, TEXT("Blueprint has no generated class"));
+        UObject* CDO = BP->GeneratedClass->GetDefaultObject();
+        for (int32 Index : OwnedObjectOperations)
+        {
+            Response->SetNumberField(TEXT("operation_index"), Index);
+            EditOwnedObject(CDO, AsObject(Operations[Index]));
+        }
+        Response->RemoveField(TEXT("operation_index"));
+        Require(Editor.CompileCurrent(), TEXT("Blueprint compilation failed after editing owned subobjects"));
+        ValidateOwnedObjectEdits(BP->GeneratedClass->GetDefaultObject(), Response);
+    }
     if (Action == TEXT("apply") && (Editor.bChangedVariableType || !Editor.ChangedComponentClasses.IsEmpty()))
     { CheckMemberDependents(Editor.ChangedComponentClasses, MemberDependents, Response); }
     FJson Aliases = MakeShared<FJsonObject>();
@@ -1819,7 +1843,7 @@ static void Execute(const FJson& Request, const FJson& Response)
         Response->SetObjectField(TEXT("blueprint"), DescribeBlueprint(BP, Request));
         Response->SetStringField(TEXT("previous_revision"), Before);
     }
-    bool DryRun = Boolean(Request, TEXT("dry_run"));
+    bool DryRun = Boolean(Request, TEXT("dry_run"), !OwnedObjectOperations.IsEmpty());
     Response->SetBoolField(TEXT("dry_run"), DryRun);
     if (DryRun) { return; }
     // Detect a file changed by another process while this commandlet was compiling.

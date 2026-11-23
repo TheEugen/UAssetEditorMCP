@@ -1,88 +1,3 @@
-static bool EditableAssetField(const FProperty* Field)
-{
-    return Field && Field->HasAnyPropertyFlags(CPF_Edit) &&
-        !Field->HasAnyPropertyFlags(CPF_EditConst | CPF_Transient | CPF_Deprecated) && Field->ArrayDim == 1;
-}
-
-static void DescribeReflectedAsset(UObject* Asset, const FJson& Response)
-{
-    Response->SetStringField(TEXT("class"), Asset->GetClass()->GetPathName());
-    FJson Properties = MakeShared<FJsonObject>();
-    for (TFieldIterator<FProperty> It(Asset->GetClass()); It; ++It)
-    {
-        if (!EditableAssetField(*It)) { continue; }
-        FString Text;
-        It->ExportText_InContainer(0, Text, Asset, nullptr, Asset, PPF_None);
-        FJson Entry = MakeShared<FJsonObject>();
-        Entry->SetStringField(TEXT("type"), It->GetCPPType());
-        Entry->SetStringField(TEXT("value"), Text);
-        Properties->SetObjectField(It->GetName(), Entry);
-    }
-    Response->SetObjectField(TEXT("properties"), Properties);
-}
-
-static void EditAssetProperty(UObject* Asset, const FJson& Op)
-{
-    const FString Kind = String(Op, TEXT("op"));
-    const FString Path = String(Op, TEXT("property"));
-    TArray<FString> Parts;
-    Path.ParseIntoArray(Parts, TEXT("."), false);
-    UStruct* Type = Asset->GetClass();
-    void* Address = Asset;
-    FProperty* Top = nullptr;
-    FProperty* Field = nullptr;
-    for (int32 I = 0; I < Parts.Num(); ++I)
-    {
-        Field = FindFProperty<FProperty>(Type, FName(*Parts[I]));
-        Require(EditableAssetField(Field), TEXT("Editable property not found: ") + Path);
-        if (!Top) { Top = Field; }
-        Address = Field->ContainerPtrToValuePtr<void>(Address);
-        if (I + 1 < Parts.Num())
-        {
-            auto* Struct = CastField<FStructProperty>(Field);
-            Require(Struct != nullptr, TEXT("Property paths may traverse only structs: ") + Path);
-            Type = Struct->Struct;
-        }
-    }
-    Require(Field != nullptr, TEXT("Empty property path"));
-    Asset->PreEditChange(Top);
-    EPropertyChangeType::Type Change = EPropertyChangeType::ValueSet;
-    if (Kind != TEXT("set_property"))
-    {
-        auto* ArrayField = CastField<FArrayProperty>(Field);
-        Require(ArrayField && (Kind == TEXT("array_add") || Kind == TEXT("array_remove") || Kind == TEXT("array_set")),
-            TEXT("Expected an array property and array_add, array_remove or array_set"));
-        FScriptArrayHelper Elements(ArrayField, Address);
-        int32 Index;
-        if (Kind == TEXT("array_add"))
-        {
-            Index = Elements.AddValue();
-            Change = EPropertyChangeType::ArrayAdd;
-        }
-        else
-        {
-            Index = Integer(Op, TEXT("index"), INDEX_NONE);
-            Require(Elements.IsValidIndex(Index), TEXT("Array index out of bounds: ") + Path);
-        }
-        if (Kind == TEXT("array_remove"))
-        {
-            Elements.RemoveValues(Index);
-            Change = EPropertyChangeType::ArrayRemove;
-        }
-        else { Address = Elements.GetRawPtr(Index); }
-        Field = ArrayField->Inner;
-    }
-    if (Change != EPropertyChangeType::ArrayRemove)
-    {
-        const FString Value = ValueString(Op, TEXT("value"));
-        const TCHAR* End = Field->ImportText_Direct(*Value, Address, Asset, PPF_None);
-        Require(End && FString(End).TrimStartAndEnd().IsEmpty(), TEXT("Invalid Unreal property text: ") + Path);
-    }
-    FPropertyChangedEvent Changed(Field->GetOwnerProperty(), Change);
-    Changed.SetActiveMemberProperty(Top);
-    Asset->PostEditChangeProperty(Changed);
-}
-
 static UObject* CreateReflectedAsset(const FString& Package, const FString& ClassPath)
 {
     UClass* Class = LoadObject<UClass>(nullptr, *ClassPath);
@@ -126,7 +41,14 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     Require(Asset && Asset->IsAsset() && Asset->GetOutermost()->GetName() == Package &&
         !Asset->IsA<UBlueprint>() && !Asset->IsA<UObjectRedirector>() && !Asset->IsA<UWorld>(),
         TEXT("Expected a standalone non-Blueprint asset"));
-    if (Inspect) { DescribeReflectedAsset(Asset, Response); return; }
+    const auto Describe = [&]
+    {
+        Response->SetStringField(TEXT("class"), Asset->GetClass()->GetPathName());
+        Response->SetObjectField(TEXT("properties"), DescribeEditableProperties(Asset));
+        FJson Slots = DescribeOwnedSlots(Asset);
+        if (!Slots->Values.IsEmpty()) { Response->SetObjectField(TEXT("subobjects"), Slots); }
+    };
+    if (Inspect) { Describe(); return; }
 
     const bool DryRun = Boolean(Request, TEXT("dry_run"), true);
     Response->SetBoolField(TEXT("dry_run"), DryRun);
@@ -145,13 +67,21 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     }
     const auto Operations = Array(Request, TEXT("operations"), !Create);
     Require(Operations.Num() <= 1000, TEXT("At most 1000 asset operations per batch"));
+    bool EditedOwnedObjects = false;
     for (int32 I = 0; I < Operations.Num(); ++I)
     {
         Response->SetNumberField(TEXT("operation_index"), I);
-        EditAssetProperty(Asset, AsObject(Operations[I]));
+        FJson Op = AsObject(Operations[I]);
+        if (IsOwnedObjectOperation(String(Op, TEXT("op"))))
+        {
+            EditOwnedObject(Asset, Op);
+            EditedOwnedObjects = true;
+        }
+        else { EditAssetProperty(Asset, Op); }
     }
     Response->RemoveField(TEXT("operation_index"));
-    DescribeReflectedAsset(Asset, Response);
+    if (EditedOwnedObjects) { ValidateOwnedObjectEdits(Asset, Response); }
+    Describe();
     if (DryRun) { return; }
     if (Create)
     {

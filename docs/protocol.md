@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 10
+# UAsset Agent JSON protocol, version 11
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -855,6 +855,31 @@ Use `blueprint_asset_inspect`, `blueprint_asset_apply` and `blueprint_asset_crea
 ```
 
 Both write actions preview by default. Repeat with `dry_run:false` to persist. Updates require a single writable package and return a backup under `backups`. Creation requires a new package path and a concrete data asset class (including a generated data asset class) or a matching editor factory that can create its asset unattended. Creation accepts an optional array of operations following the initial properties. Supply values as Unreal text strings. Use the Blueprint and level tools for graph and map edits.
+
+### Owned instanced subobjects
+
+Use these operations with `asset_create`, `asset_apply`, or normal Blueprint `create` and `apply`. `asset_inspect` returns `subobjects`, and full Blueprint inspection returns `blueprint.default_subobjects`. Each slot reports the accepted class, whether it is an array, and its populated items. Each item reports its reflected path, class, object path, and owner. `owned: true` means the object has the slot's containing object as its Unreal outer. Owned items also expose their editable properties. Use paths such as `GEComponents[0]` or `Fragments[1].Child` as selectors. Array indices are zero-based.
+
+| Operation | Fields and behavior |
+|---|---|
+| `create_subobject` | `property`, `class`, optional `owner`. Creates a concrete inline class under the selected owner. Fills an empty instanced object property or appends to an instanced object array. |
+| `clone_subobject` | `property`, `source: {path, asset?}`, optional `owner`. Duplicates an owned object from the current target or from a saved `/Game` asset. A Blueprint source resolves to its class defaults. The duplicate belongs to the destination owner and includes the source object's owned children. |
+| `set_subobject_property` | `target`, `property`, `value`. Updates an editable property on an owned object. `property` may traverse structs, and `value` uses Unreal text format. |
+
+`owner` defaults to the asset or Blueprint class default object. Slots must be editable reflected instanced object fields. Blueprint batches apply these operations in order after graph changes and ordinary class defaults, then compile again. Batches with these operations preview by default. Existing packages require `expected_revision` and receive the usual backup on save. The edited asset or Blueprint defaults must pass native data validation. Its messages appear in `validation_diagnostics`.
+
+For a Gameplay Effect Blueprint, use a registered project tag and a `GameplayEffect` parent. This example adds a five-second effect and a target tag component.
+
+```json
+{"action":"create","asset":"/Game/Abilities/GE_LegSlow","parent_class":"/Script/GameplayAbilities.GameplayEffect","operations":[
+  {"op":"set_default","property":"DurationPolicy","value":"HasDuration"},
+  {"op":"set_default","property":"DurationMagnitude","value":"(ScalableFloatMagnitude=(Value=5.0))"},
+  {"op":"create_subobject","property":"GEComponents","class":"/Script/GameplayAbilities.TargetTagsGameplayEffectComponent"},
+  {"op":"set_subobject_property","target":"GEComponents[0]","property":"InheritableGrantedTagsContainer.Added","value":"(GameplayTags=((TagName=\"PP.Status.LegSlowed\")))"}
+],"dry_run":true}
+```
+
+To reuse a Lyra fragment in another item-definition Blueprint, add an operation such as `{"op":"clone_subobject","property":"Fragments","source":{"asset":"/Game/Items/ID_Source","path":"Fragments[0]"}}`. Inspect the saved destination to verify its fragment's owner and property values.
 
 ### Blueprint diff
 
