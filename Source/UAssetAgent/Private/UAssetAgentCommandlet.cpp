@@ -2,6 +2,8 @@
 
 #include "Algo/Find.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "BlueprintActionDatabase.h"
+#include "BlueprintFunctionNodeSpawner.h"
 #include "Dom/JsonObject.h"
 #include "DiffUtils.h"
 #include "Misc/PackagePath.h"
@@ -28,6 +30,7 @@
 #include "Engine/Texture.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/Actor.h"
+#include "GameplayTagContainer.h"
 #include "HAL/FileManager.h"
 #include "K2Node_Timeline.h"
 #include "Engine/TimelineTemplate.h"
@@ -39,12 +42,16 @@
 #include "K2Node_MacroInstance.h"
 #include "K2Node_Tunnel.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_AddDelegate.h"
+#include "K2Node_BaseAsyncTask.h"
+#include "K2Node_CreateDelegate.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_ExecutionSequence.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_Knot.h"
+#include "K2Node_RemoveDelegate.h"
 #include "K2Node_Self.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
@@ -754,6 +761,7 @@ static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, bo
 #include "UAssetAgentDeclarations.inl"
 #include "UAssetAgentGraphAuthoring.inl"
 #include "UAssetAgentCallEdit.inl"
+#include "UAssetAgentAsyncGraph.inl"
 
 class FEditor
 {
@@ -1301,7 +1309,12 @@ public:
             Require(!Aliases.Contains(Alias), TEXT("Duplicate batch alias: ") + Alias);
             FString Type = String(Op, TEXT("kind"));
             UK2Node* N = nullptr;
-            if (Type == TEXT("call"))
+            const bool AsyncNode = Type == TEXT("async") || Type == TEXT("gameplay_message_listener");
+            if (AsyncNode)
+            { N = SpawnAsyncNode(BP, G, Op, Type == TEXT("gameplay_message_listener")); }
+            else if (Type == TEXT("create_delegate") || Type == TEXT("bind_delegate") || Type == TEXT("unbind_delegate"))
+            { N = NewDelegateNode(BP, G, Type, Op); }
+            else if (Type == TEXT("call"))
             {
                 UK2Node_CallFunction* Call = NewObject<UK2Node_CallFunction>(G);
                 const FString Owner = String(Op, TEXT("class"), TEXT("self"), false);
@@ -1356,10 +1369,13 @@ public:
             else if (Type == TEXT("reroute")) { N = NewObject<UK2Node_Knot>(G); }
             else { N = NewGraphNode(BP, G, Type, Op); }
             Require(N->IsCompatibleWithGraph(G), TEXT("Node is incompatible with this graph"));
-            G->AddNode(N, false, false);
-            N->CreateNewGuid();
-            N->PostPlacedNewNode();
-            N->AllocateDefaultPins();
+            if (!AsyncNode)
+            {
+                G->AddNode(N, false, false);
+                N->CreateNewGuid();
+                N->PostPlacedNewNode();
+                N->AllocateDefaultPins();
+            }
             if (Type == TEXT("select") && Op->HasField(TEXT("index_type")))
             {
                 auto* Select = CastChecked<UK2Node_Select>(N);
@@ -1383,6 +1399,14 @@ public:
             UEdGraphNode* Existing = Node(G, String(Op, TEXT("node")));
             Require(Existing->GetClass() == UK2Node_CallFunction::StaticClass(), TEXT("retarget_call requires an ordinary function call node"));
             RetargetCall(BP, CastChecked<UK2Node_CallFunction>(Existing), Op, Schema);
+        }
+        else if (Kind == TEXT("set_delegate_function"))
+        {
+            auto* Delegate = Cast<UK2Node_CreateDelegate>(Node(G, String(Op, TEXT("node"))));
+            Require(Delegate && Delegate->GetDelegateSignature(), TEXT("Connect the Create Delegate node to a signature before selecting its function"));
+            Delegate->Modify();
+            Delegate->SetFunction(FName(*String(Op, TEXT("function"))));
+            Delegate->HandleAnyChangeWithoutNotifying();
         }
         else if (Kind == TEXT("connect") || Kind == TEXT("disconnect"))
         {
@@ -1541,7 +1565,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 11);
+    Response->SetNumberField(TEXT("protocol_version"), 12);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }

@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 11
+# UAsset Agent JSON protocol, version 12
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -884,6 +884,24 @@ To reuse a Lyra fragment in another item-definition Blueprint, add an operation 
 ### Blueprint diff
 
 Call `blueprint_diff` with `a` and `b`. Either may be a /Game package or an absolute .uasset file under this project's Saved/UAssetAgent/Backups directory. Optional `normalize_paths` maps folder prefixes such as `{"/Game/Older/":"/Game/Newer/"}`. The response contains `identical` and ordered changes with a path, change kind, and before/after values. Node paths contain their GUID.
+
+### Typed async nodes and multicast delegates
+
+Use these node kinds inside a Blueprint `create` or `apply` batch.
+
+| `add_node` kind | Fields and behavior |
+|---|---|
+| `async` | `class`, `function`, optional `node_class`. Spawns the registered async Blueprint node for a static factory. Specify the node class when multiple actions match. Inspect the actual pins and wire the async outputs with `connect`. |
+| `gameplay_message_listener` | `channel`, `payload_type`. Spawns the Gameplay Message Router listener in an event graph. The channel must be a registered gameplay tag and the payload must be a Blueprint-visible struct path matching the sender's payload. The node exposes `OnMessageReceived`, `ActualChannel`, the typed `Payload` and `AsyncTaskProxy` (shown as Async Action in the editor). Set `MatchType` with `set_pin_default` if you need partial matching. |
+| `create_delegate` | Creates a callback reference. Connect `self` when the callback is on another object and wire `OutputDelegate` to a binding node so Unreal can determine its signature. Then send `set_delegate_function` with `node` and the name of an existing `function` or custom event. |
+| `bind_delegate`, `unbind_delegate` | `delegate`, optional `class` (defaults to `self`). Bind or unbind an individual callback on a Blueprint-assignable multicast delegate. Connect the callback, execution and target pins. Unreal checks the callback signature during compilation. |
+
+```json
+{"op":"add_node","kind":"gameplay_message_listener","id":"listen",
+ "channel":"PP.Player.QuickComm","payload_type":"/Game/Messages/ST_QuickComm.ST_QuickComm"}
+```
+
+Enable Gameplay Message Router in the project to use its listener. To pair a widget's `Construct` and `Destruct` events, store the listener's `AsyncTaskProxy` output in a variable of type `/Script/GameplayMessageRuntime.AsyncAction_ListenForGameplayMessage`. Use the listener's `then` pin to set the variable, route `OnMessageReceived` to your callback, and call `/Script/Engine.CancellableAsyncAction.Cancel` on the stored proxy from `Destruct` if it is valid. Clear the variable after canceling. This lets the widget subscribe again when it is reopened. Exact pin names and types are returned by full or graph inspection.
 
 ### Blueprint graph authoring
 
