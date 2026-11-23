@@ -61,6 +61,7 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Logging/TokenizedMessage.h"
 #include "Misc/DataValidation.h"
+#include "Misc/FeedbackContext.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -757,7 +758,7 @@ static bool Compile(UBlueprint* BP, const FJson& Response, EBlueprintCompileOpti
 }
 
 #include "UAssetAgentMemberTypes.inl"
-static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, bool IncludeChildReferencers);
+static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, const FJson& Response, bool IncludeChildReferencers = false);
 #include "UAssetAgentDeclarations.inl"
 #include "UAssetAgentGraphAuthoring.inl"
 #include "UAssetAgentCallEdit.inl"
@@ -1180,9 +1181,9 @@ public:
             FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
             return;
         }
-        if (Kind == TEXT("rename_variable")) { RenameAuthoredVariable(BP, Op); return; }
+        if (Kind == TEXT("rename_variable")) { RenameAuthoredVariable(BP, Op, Response); return; }
         if (Kind == TEXT("add_component") || Kind == TEXT("remove_component"))
-        { EditAuthoredComponent(BP, Op, Kind == TEXT("remove_component")); return; }
+        { EditAuthoredComponent(BP, Op, Kind == TEXT("remove_component"), Response); return; }
         if (Kind == TEXT("replace_component_class"))
         {
             if (USCS_Node* Changed = ReplaceComponentClass(BP, Op))
@@ -1540,7 +1541,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 #include "UAssetAgentFunctionLibrary.inl"
 
 static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
-    const TArray<TSharedPtr<FJsonValue>>& Operations)
+    const TArray<TSharedPtr<FJsonValue>>& Operations, const FJson& Response)
 {
     TSet<FName> Members;
     TArray<USCS_Node*> Components;
@@ -1561,7 +1562,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
     }
     TArray<FMemberDependent> Result;
     if (Members.IsEmpty()) { return Result; }
-    for (UBlueprint* Referencer : ReferencingBlueprints(Blueprint, true))
+    for (UBlueprint* Referencer : ReferencingBlueprints(Blueprint, Response, true))
     {
         const bool Child = Referencer->ParentClass && Referencer->ParentClass->IsChildOf(Blueprint->GeneratedClass);
         FMemberNodeSnapshot Nodes = CaptureMemberNodes(Referencer, Blueprint, Members);
@@ -1583,7 +1584,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 14);
+    Response->SetNumberField(TEXT("protocol_version"), 15);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }
@@ -1822,7 +1823,7 @@ static void Execute(const FJson& Request, const FJson& Response)
         { Editor.PlannedFunctionDeletes.Add(FName(*String(Op, TEXT("name")))); }
     }
     const TArray<FMemberDependent> MemberDependents = Action == TEXT("apply") && !Library ?
-        CaptureMemberDependents(BP, Operations) : TArray<FMemberDependent>();
+        CaptureMemberDependents(BP, Operations, Response) : TArray<FMemberDependent>();
     TMap<FName, FLibrarySignature> LibrarySignatures;
     TArray<FLibraryCaller> LibraryCallers;
     if (Library)
@@ -1836,7 +1837,7 @@ static void Execute(const FJson& Request, const FJson& Response)
         if (Action == TEXT("apply"))
         {
             LibrarySignatures = CaptureLibrarySignatures(BP, Operations);
-            if (!LibrarySignatures.IsEmpty()) { LibraryCallers = FindLibraryCallers(BP, LibrarySignatures); }
+            if (!LibrarySignatures.IsEmpty()) { LibraryCallers = FindLibraryCallers(BP, LibrarySignatures, Response); }
         }
     }
     TArray<int32> OwnedObjectOperations;
@@ -1929,6 +1930,7 @@ UUAssetAgentCommandlet::UUAssetAgentCommandlet()
     IsEditor = true;
     LogToConsole = true;
     ShowErrorCount = false;
+    UseCommandletResultAsExitCode = true;
 }
 
 int32 UUAssetAgentCommandlet::Main(const FString& Params)
@@ -1950,8 +1952,6 @@ int32 UUAssetAgentCommandlet::Main(const FString& Params)
         FJson Request;
         Require(FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Request) && Request.IsValid(), TEXT("Request must be a JSON object"));
         Execute(Request, Response);
-        // Loading the broken asset can log errors before a successful repair.
-        UseCommandletResultAsExitCode = String(Request, TEXT("action")) == TEXT("apply") && Boolean(Request, TEXT("repair"));
         Response->SetBoolField(TEXT("ok"), true);
     }
     catch (const FFailure& Failure)
@@ -1959,6 +1959,17 @@ int32 UUAssetAgentCommandlet::Main(const FString& Params)
         Response->SetBoolField(TEXT("ok"), false);
         Response->SetStringField(TEXT("error"), Failure.Message);
         ExitCode = 1;
+    }
+    Response->SetNumberField(TEXT("commandlet_result"), ExitCode);
+    TArray<FString> EngineErrors;
+    GWarn->GetErrors(EngineErrors);
+    if (!EngineErrors.IsEmpty())
+    {
+        Response->SetNumberField(TEXT("engine_log_error_count"), EngineErrors.Num());
+        TArray<TSharedPtr<FJsonValue>> LogWarnings;
+        for (int32 Index = 0; Index < FMath::Min(10, EngineErrors.Num()); ++Index)
+        { LogWarnings.Add(MakeShared<FJsonValueString>(EngineErrors[Index].Left(1024))); }
+        Response->SetArrayField(TEXT("engine_log_warnings"), LogWarnings);
     }
     FString Text;
     FJsonSerializer::Serialize(Response.ToSharedRef(), TJsonWriterFactory<>::Create(&Text));

@@ -327,7 +327,13 @@ static void ReplaceReferencesAction(const FJson& Request, const FJson& Response)
     }
     Response->SetArrayField(TEXT("excluded_maps"), LevelStrings(SkippedMaps));
     FJson Revisions = MakeShared<FJsonObject>();
-    for (const auto& Entry : Files) { Revisions->SetStringField(Entry.Key, Revision(Entry.Value)); }
+    const FReferenceScan Scan(Response);
+    for (const auto& Entry : Files)
+    {
+        try { Revisions->SetStringField(Entry.Key, Revision(Entry.Value)); }
+        catch (const FFailure& Failure) { Scan.Fail(Entry.Key, Failure.Message); }
+    }
+    Scan.RequireComplete();
     Response->SetObjectField(TEXT("revisions"), Revisions);
     const auto Verify = [&]()
     {
@@ -362,11 +368,18 @@ static void ReplaceReferencesAction(const FJson& Request, const FJson& Response)
                 !IFileManager::Get().FileExists(*FPaths::ChangeExtension(Target.File, TEXT("uexp"))) &&
                 !IFileManager::Get().FileExists(*FPaths::ChangeExtension(Target.File, TEXT("ubulk"))),
                 TEXT("The package is read-only or split"));
-            if (!Target.External) { Target.Asset = LoadExactAsset(Target.Name); }
-            Require(!Target.Asset || !Target.Asset->IsA<UObjectRedirector>(), TEXT("The scope includes an asset redirector"));
-            Target.Package = Target.Asset ? Target.Asset->GetPackage() : LoadPackage(nullptr, *Target.Name, LOAD_None);
+            Target.Package = Scan.Load(Target.Name);
             Require(Target.Package != nullptr, TEXT("Could not load the referring package"));
-            Target.Package->FullyLoad();
+            if (!Target.External)
+            {
+                Target.Asset = FindPackageAsset(Target.Package);
+                if (!Target.Asset || Target.Asset->GetOutermost() != Target.Package)
+                {
+                    Scan.Fail(Target.Name, TEXT("Expected asset not found in package"));
+                    Require(false, TEXT("Expected asset not found in package"));
+                }
+            }
+            Require(!Target.Asset || !Target.Asset->IsA<UObjectRedirector>(), TEXT("The scope includes an asset redirector"));
             if (Target.External)
             {
                 TArray<UObject*> Objects;
@@ -384,6 +397,8 @@ static void ReplaceReferencesAction(const FJson& Request, const FJson& Response)
         }
         catch (const FFailure& Failure) { RecordFailure(Target, Failure); }
     }
+    Response->SetArrayField(TEXT("packages"), Reports);
+    Scan.RequireComplete();
     // Rewrite the entire scope before recompiling any Blueprint. A referring
     // Blueprint can depend on another package in the same replacement batch.
     for (FTarget& Target : Targets)
@@ -402,7 +417,6 @@ static void ReplaceReferencesAction(const FJson& Request, const FJson& Response)
         }
         catch (const FFailure& Failure) { RecordFailure(Target, Failure); }
     }
-    Response->SetArrayField(TEXT("packages"), Reports);
     Require(Valid, TEXT("One or more packages could not be migrated"));
     if (DryRun || Targets.IsEmpty()) { return; }
     Verify();

@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 14
+# UAsset Agent JSON protocol, version 15
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -452,6 +452,16 @@ contain `diagnostics`, `blueprint`, `node_ids`, and `previous_revision`. Saved
 requests return a new `revision` and, for existing assets, the `backup` path.
 Dry runs return the proposed snapshot in the selected mode but no new file revision. The client adds
 `logs`, pointing to retained request/response/Unreal logs for that invocation.
+`commandlet_result` reports the native commandlet's result, and
+`process_exit_code` reports the Unreal process exit code. Unreal log errors
+observed during an otherwise successful request are returned under
+`engine_log_error_count` and `engine_log_warnings`. The full messages are in
+the invocation log.
+
+Reference-sensitive preflights that load packages return `reference_scan`.
+Its `complete` flag and `failed_packages` list identify packages Unreal could
+not check and the reason for each failure. The tool blocks the associated save
+when a required package could not be checked.
 
 Errors contain `error`, and `operation_index` (zero-based) when an individual
 operation failed. Compile diagnostics include severity and message.

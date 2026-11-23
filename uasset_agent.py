@@ -304,6 +304,7 @@ class Client:
             if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
                 raise AgentError(f"Malformed commandlet response. Logs: {run_dir}")
             response["logs"] = str(run_dir)
+            response["process_exit_code"] = result.returncode
             if disk_query:
                 response["may_not_see_unsaved_editor_changes"] = True
             if result.returncode != 0 and response["ok"]:

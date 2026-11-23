@@ -1,6 +1,6 @@
 // Authored Blueprint members. External graph references to a renamed variable
 // can follow Unreal's persistent member GUID when their package is next loaded.
-static void RenameAuthoredVariable(UBlueprint* BP, const FJson& Op)
+static void RenameAuthoredVariable(UBlueprint* BP, const FJson& Op, const FJson& Response)
 {
     const FName Old(*String(Op, TEXT("name")));
     const FString New = String(Op, TEXT("new_name"));
@@ -8,7 +8,7 @@ static void RenameAuthoredVariable(UBlueprint* BP, const FJson& Op)
     Require(Index != INDEX_NONE, TEXT("Local member variable not found"));
     AvailableName(BP, New);
     const FGuid Id = BP->NewVariables[Index].VarGuid;
-    for (UBlueprint* Other : ReferencingBlueprints(BP, true))
+    for (UBlueprint* Other : ReferencingBlueprints(BP, Response, true))
     {
         Require(!Other->ParentClass || !Other->ParentClass->IsChildOf(BP->GeneratedClass) ||
             FBlueprintEditorUtils::FindNewVariableIndex(Other, FName(*New)) == INDEX_NONE,
@@ -32,7 +32,7 @@ static void RenameAuthoredVariable(UBlueprint* BP, const FJson& Op)
     FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
 }
 
-static void EditAuthoredComponent(UBlueprint* BP, const FJson& Op, bool Remove)
+static void EditAuthoredComponent(UBlueprint* BP, const FJson& Op, bool Remove, const FJson& Response)
 {
     USimpleConstructionScript* SCS = BP->SimpleConstructionScript;
     Require(SCS && BP->ParentClass && BP->ParentClass->IsChildOf(AActor::StaticClass()), TEXT("Expected an Actor Blueprint"));
@@ -46,7 +46,7 @@ static void EditAuthoredComponent(UBlueprint* BP, const FJson& Op, bool Remove)
         const FName Name = Component.Node->GetVariableName();
         Require(MemberNodes(BP, BP, {Name}).IsEmpty() && !FBlueprintEditorUtils::IsVariableUsed(BP, Name),
             TEXT("Remove component references before removing the component"));
-        for (UBlueprint* Other : ReferencingBlueprints(BP, true))
+        for (UBlueprint* Other : ReferencingBlueprints(BP, Response, true))
         {
             auto* Overrides = Other->GetInheritableComponentHandler(false);
             Require(MemberNodes(Other, BP, {Name}).IsEmpty() &&

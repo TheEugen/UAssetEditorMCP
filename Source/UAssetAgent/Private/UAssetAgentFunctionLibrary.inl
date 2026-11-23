@@ -77,10 +77,10 @@ struct FLibraryCaller
     TArray<FName> Functions;
 };
 
-static TArray<FLibraryCaller> FindLibraryCallers(UBlueprint* Library, const TMap<FName, FLibrarySignature>& Signatures)
+static TArray<FLibraryCaller> FindLibraryCallers(UBlueprint* Library, const TMap<FName, FLibrarySignature>& Signatures, const FJson& Response)
 {
     TArray<FLibraryCaller> Callers;
-    for (UBlueprint* Blueprint : ReferencingBlueprints(Library))
+    for (UBlueprint* Blueprint : ReferencingBlueprints(Library, Response))
     {
         FLibraryCaller Caller{Blueprint, {}};
         TArray<UK2Node_CallFunction*> Calls;

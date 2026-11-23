@@ -1,5 +1,35 @@
 #include "Engine/LevelStreamingDynamic.h"
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAssetAgentReferenceScanFailureTest, "UAssetAgent.ReferenceScanFailure",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUAssetAgentReferenceScanFailureTest::RunTest(const FString& Parameters)
+{
+    using namespace UAssetAgentTests;
+    const FString Root = TestRoot();
+    const FString Missing = Root + TEXT("/Missing");
+    const FString Present = Root + TEXT("/BP_Inspectable");
+    try
+    {
+        Save(Blueprint(Present));
+        const FJson Response = MakeShared<FJsonObject>();
+        const FReferenceScan Scan(Response);
+        TestNull(TEXT("Missing required package cannot be loaded"), Scan.Load(Missing));
+        TestNotNull(TEXT("A later readable package is still inspected"), Scan.Load(Present));
+        const FJson Status = Object(Response, TEXT("reference_scan"));
+        TestFalse(TEXT("Scan reports incomplete"), Boolean(Status, TEXT("complete"), true));
+        const auto Failed = Array(Status, TEXT("failed_packages"), true);
+        Require(Failed.Num() == 1, TEXT("Expected one failed package"));
+        TestEqual(TEXT("Failed package is identified"), String(AsObject(Failed[0]), TEXT("asset")), Missing);
+        bool Blocked = false;
+        try { Scan.RequireComplete(); }
+        catch (const FFailure&) { Blocked = true; }
+        TestTrue(TEXT("Incomplete scan stops a reference-sensitive edit"), Blocked);
+    }
+    catch (const FFailure& Failure) { AddError(Failure.Message); }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAssetAgentReferenceQueryTest, "UAssetAgent.AssetReferences",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 

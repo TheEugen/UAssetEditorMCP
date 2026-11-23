@@ -10,7 +10,66 @@ static TArray<FName> Referencers(IAssetRegistry& Registry, FName Package)
     return Result;
 }
 
-static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, bool IncludeChildReferencers = false)
+static UObject* FindPackageAsset(UPackage* Package)
+{
+    return FindObject<UObject>(Package, *FPackageName::GetLongPackageAssetName(Package->GetName()));
+}
+
+class FReferenceScan
+{
+    FJson Status;
+
+public:
+    explicit FReferenceScan(const FJson& Response)
+    {
+        if (Response->HasField(TEXT("reference_scan"))) { Status = Object(Response, TEXT("reference_scan")); }
+        else
+        {
+            Status = MakeShared<FJsonObject>();
+            Status->SetBoolField(TEXT("complete"), true);
+            Status->SetArrayField(TEXT("failed_packages"), {});
+            Response->SetObjectField(TEXT("reference_scan"), Status);
+        }
+    }
+
+    void Fail(const FString& Package, const FString& Reason) const
+    {
+        auto Failures = Array(Status, TEXT("failed_packages"));
+        FJson Item = MakeShared<FJsonObject>();
+        Item->SetStringField(TEXT("asset"), Package);
+        Item->SetStringField(TEXT("error"), Reason);
+        Failures.Add(JsonValue(Item));
+        Status->SetBoolField(TEXT("complete"), false);
+        Status->SetArrayField(TEXT("failed_packages"), Failures);
+    }
+
+    UPackage* Load(const FString& Package) const
+    {
+        const int32 PreviousErrors = GWarn->GetNumErrors();
+        UPackage* Loaded = LoadPackage(nullptr, *Package, LOAD_None);
+        if (Loaded) { Loaded->FullyLoad(); }
+        if (!Loaded)
+        {
+            Fail(Package, TEXT("Could not load package"));
+            return nullptr;
+        }
+        if (GWarn->GetNumErrors() > PreviousErrors)
+        {
+            TArray<FString> Errors;
+            GWarn->GetErrors(Errors);
+            Fail(Package, Errors.IsValidIndex(PreviousErrors) ? Errors[PreviousErrors].Left(1024) : TEXT("Unreal logged an error loading the package"));
+            return nullptr;
+        }
+        return Loaded;
+    }
+
+    void RequireComplete() const
+    {
+        Require(Boolean(Status, TEXT("complete")), TEXT("Reference scan incomplete. See reference_scan.failed_packages"));
+    }
+};
+
+static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, const FJson& Response, bool IncludeChildReferencers)
 {
     IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
     Registry.SearchAllAssets(true);
@@ -18,14 +77,14 @@ static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, bo
     TArray<FName> Pending = Referencers(Registry, Root);
     TSet<FName> Visited{Root};
     TArray<UBlueprint*> Result;
+    const FReferenceScan Scan(Response);
     for (int32 I = 0; I < Pending.Num(); ++I)
     {
         const FName Package = Pending[I];
         if (Visited.Contains(Package)) { continue; }
         Visited.Add(Package);
-        UPackage* Loaded = LoadPackage(nullptr, *Package.ToString(), LOAD_None);
-        Require(Loaded != nullptr, TEXT("Cannot load a referencing package: ") + Package.ToString());
-        Loaded->FullyLoad();
+        UPackage* Loaded = Scan.Load(Package.ToString());
+        if (!Loaded) { continue; }
         TArray<UObject*> Objects;
         GetObjectsWithOuter(Loaded, Objects, true, RF_Transient);
         for (UObject* Object : Objects)
@@ -41,6 +100,7 @@ static TArray<UBlueprint*> ReferencingBlueprints(const UBlueprint* Blueprint, bo
             }
         }
     }
+    Scan.RequireComplete();
     Result.Sort([](const UBlueprint& A, const UBlueprint& B) { return A.GetPathName() < B.GetPathName(); });
     return Result;
 }
@@ -81,7 +141,7 @@ static UObject* LoadExactAsset(const FString& Package)
     UPackage* Loaded = LoadPackage(nullptr, *Package, LOAD_None);
     Require(Loaded != nullptr, TEXT("Cannot load package: ") + Package);
     Loaded->FullyLoad();
-    UObject* Asset = FindObject<UObject>(Loaded, *FPackageName::GetLongPackageAssetName(Package));
+    UObject* Asset = FindPackageAsset(Loaded);
     Require(Asset && Asset->GetOutermost() == Loaded, TEXT("Asset not found in package: ") + Package);
     return Asset;
 }
@@ -106,6 +166,9 @@ static void Maintenance(const FJson& Request, const FJson& Response)
         for (FName Ref : Refs) { Values.Add(MakeShared<FJsonValueString>(Ref.ToString())); }
         Response->SetArrayField(TEXT("referencers"), Values);
         Require(Refs.IsEmpty() || Boolean(Request, TEXT("force")), TEXT("Asset has referencers; force:true is required to leave broken references"));
+        const FReferenceScan Scan(Response);
+        for (FName Ref : Refs) { Scan.Load(Ref.ToString()); }
+        Scan.RequireComplete();
         UObject* Asset = LoadExactAsset(Package);
         if (DryRun) { return; }
         BackupMaintenance({{Package, Before}}, Response);
@@ -156,14 +219,20 @@ static void Maintenance(const FJson& Request, const FJson& Response)
     { for (FName Ref : Referencers(Registry, Package)) { if (!RedirectorPackages.Contains(Ref)) { ToSave.Add(Ref); } } }
     TArray<UObject*> Assets;
     TArray<UPackage*> Packages;
+    const FReferenceScan Scan(Response);
     for (FName Name : ToSave)
     {
         const FString Package = Name.ToString();
         Revisions.Add(Package, Revision(MaintenanceFile(Registry, Package)));
-        UObject* Asset = LoadExactAsset(Package);
+        UPackage* Loaded = Scan.Load(Package);
+        if (!Loaded) { continue; }
+        UObject* Asset = FindPackageAsset(Loaded);
+        if (!Asset || Asset->GetOutermost() != Loaded)
+        { Scan.Fail(Package, TEXT("Expected asset not found in package")); continue; }
         Require(!Asset->IsA<UObjectRedirector>(), TEXT("A redirector outside the requested folder refers to this folder; choose a common ancestor folder"));
         Assets.Add(Asset); Packages.Add(Asset->GetOutermost());
     }
+    Scan.RequireComplete();
     FJson RevisionJson = MakeShared<FJsonObject>();
     for (const auto& Pair : Revisions) { RevisionJson->SetStringField(Pair.Key, Pair.Value); }
     Response->SetObjectField(TEXT("revisions"), RevisionJson);
