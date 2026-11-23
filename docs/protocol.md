@@ -1,4 +1,14 @@
-# UAsset Agent JSON protocol, version 15
+# UAsset Agent JSON protocol, version 16
+
+### Animation sequences
+
+`asset_inspect` returns `animation` with the skeleton, duration, root motion, compression settings, codec class and time/value pairs for each float curve. Use `asset_apply` with the sequence revision. `set_float_curve` replaces the named curve's keys with linear keys in seconds. `apply_distance_curve` runs Unreal's DistanceCurveModifier once on root motion using its XY defaults. Enable Animation Locomotion Library in the project. Regenerating an existing curve requires `replace_existing: true`. The optional compression check reads the running platform's compressed sample buffer.
+
+```json
+{"op":"set_float_curve","curve":"Stride","keys":[{"time":0,"value":0},{"time":0.1,"value":1}]}
+{"op":"apply_distance_curve","curve":"Distance","sample_rate":30,"stop_at_end":false,"replace_existing":true}
+{"op":"set_curve_compression","settings":"/Game/Characters/Heroes/Mannequin/Animations/UniformIndexableCurveCompressionSettings","verify_indexed_curve":"Distance"}
+```
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.

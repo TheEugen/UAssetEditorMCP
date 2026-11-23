@@ -9,7 +9,8 @@ public class UAssetAgent : ModuleRules
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine" });
         PrivateDependencyModuleNames.AddRange(new[] {
             "UnrealEd", "BlueprintGraph", "Kismet", "KismetCompiler", "Json", "AssetRegistry",
-            "AnimGraph", "AnimGraphRuntime", "UMG", "UMGEditor", "SlateCore", "MovieScene", "AssetTools", "RHI", "GameplayTags"
+            "AnimGraph", "AnimGraphRuntime", "AnimationModifiers", "AnimationBlueprintLibrary", "TargetPlatform",
+            "UMG", "UMGEditor", "SlateCore", "MovieScene", "AssetTools", "RHI", "GameplayTags"
         });
     }
 }

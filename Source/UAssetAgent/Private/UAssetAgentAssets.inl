@@ -44,6 +44,7 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     const auto Describe = [&]
     {
         Response->SetStringField(TEXT("class"), Asset->GetClass()->GetPathName());
+        if (UAnimSequence* Sequence = Cast<UAnimSequence>(Asset)) { DescribeSequence(Sequence, Response); }
         Response->SetObjectField(TEXT("properties"), DescribeEditableProperties(Asset));
         FJson Slots = DescribeOwnedSlots(Asset);
         if (!Slots->Values.IsEmpty()) { Response->SetObjectField(TEXT("subobjects"), Slots); }
@@ -77,7 +78,7 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
             EditOwnedObject(Asset, Op);
             EditedOwnedObjects = true;
         }
-        else { EditAssetProperty(Asset, Op); }
+        else if (!EditAnimation(Asset, Op, Response)) { EditAssetProperty(Asset, Op); }
     }
     Response->RemoveField(TEXT("operation_index"));
     if (EditedOwnedObjects) { ValidateOwnedObjectEdits(Asset, Response); }
