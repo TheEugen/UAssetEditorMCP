@@ -1504,6 +1504,24 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
         if (!FPackageName::DoesPackageExist(Package)) { Status = TEXT("missing"); Chain.Add(MakeShared<FJsonValueString>(Destination)); break; }
         Registry.ScanPathsSynchronous({FPackageName::GetLongPackagePath(Package)}, true);
         Current = Registry.GetAssetByObjectPath(Target, true);
+        if (!Current.IsValid() && Target.GetSubPathString().IsEmpty())
+        {
+            // The on-disk registry indexes the Blueprint asset, while hard and
+            // soft references can target its generated class or class defaults.
+            const FString BlueprintName = FPackageName::GetLongPackageAssetName(Package);
+            const FString ClassName = BlueprintName + TEXT("_C");
+            if (Target.GetAssetName() == ClassName || Target.GetAssetName() == TEXT("Default__") + ClassName)
+            {
+                const FAssetData Blueprint = Registry.GetAssetByObjectPath(FSoftObjectPath(Package + TEXT(".") + BlueprintName), true);
+                if (Blueprint.IsValid() && Blueprint.IsInstanceOf<UBlueprint>())
+                {
+                    Chain.Add(MakeShared<FJsonValueString>(Destination));
+                    Status = TEXT("resolved");
+                    Resolved = Destination;
+                    break;
+                }
+            }
+        }
         if (!Current.IsValid()) { Status = TEXT("missing"); Chain.Add(MakeShared<FJsonValueString>(Destination)); break; }
     }
     Result->SetStringField(TEXT("status"), Status);
@@ -1565,7 +1583,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 13);
+    Response->SetNumberField(TEXT("protocol_version"), 14);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }

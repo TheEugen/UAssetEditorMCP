@@ -4,6 +4,7 @@
 #include "Components/Button.h"
 #include "Components/Overlay.h"
 #include "Components/TextBlock.h"
+#include "Misc/RedirectCollector.h"
 #include "UObject/UObjectIterator.h"
 
 namespace UAssetAgentV2Tests
@@ -342,6 +343,36 @@ bool FUAssetAgentV2MaintenanceTest::RunTest(const FString& Parameters)
         Require(RefProperty != nullptr, TEXT("Soft class property missing"));
         const FSoftObjectPtr Value = RefProperty->GetPropertyValue_InContainer(Referencing->GeneratedClass->GetDefaultObject());
         TestEqual(TEXT("Soft generated-class reference rewritten"), Value.ToSoftObjectPath().ToString(), Target->GeneratedClass->GetPathName());
+
+        const TPair<const TCHAR*, UObject*> Destinations[] = {
+            {TEXT("W_ClassAlias"), Target->GeneratedClass.Get()},
+            {TEXT("W_DefaultsAlias"), Target->GeneratedClass->GetDefaultObject()}
+        };
+        TMap<FString, FString> ExpectedDestinations;
+        for (const auto& Destination : Destinations)
+        {
+            const FString AliasPackage = Fixtures.Root + TEXT("/") + Destination.Key;
+            auto* Alias = NewObject<UObjectRedirector>(CreatePackage(*AliasPackage), FName(Destination.Key), RF_Public | RF_Standalone);
+            Alias->DestinationObject = Destination.Value;
+            Save(Alias);
+            GRedirectCollector.AddAssetPathRedirection(FSoftObjectPath(Alias), FSoftObjectPath(Destination.Value));
+            ExpectedDestinations.Add(AliasPackage, Destination.Value->GetPathName());
+        }
+        FJson Redirectors = Json(TEXT("{\"action\":\"redirectors\"}"));
+        Redirectors->SetStringField(TEXT("path"), Fixtures.Root);
+        FJson RedirectorScan = MakeShared<FJsonObject>();
+        Execute(Redirectors, RedirectorScan);
+        for (const auto& Entry : Array(RedirectorScan, TEXT("redirectors"), true))
+        {
+            const FJson Info = AsObject(Entry);
+            const FString Asset = String(Info, TEXT("asset"));
+            const FString* Expected = ExpectedDestinations.Find(Asset);
+            if (!Expected) { continue; }
+            TestEqual(TEXT("Blueprint class or default object resolves"), String(Info, TEXT("status")), FString(TEXT("resolved")));
+            TestEqual(TEXT("Resolution preserves the exact object path"), String(Info, TEXT("resolved_destination")), *Expected);
+            ExpectedDestinations.Remove(Asset);
+        }
+        TestTrue(TEXT("Both generated-object redirectors were reported"), ExpectedDestinations.IsEmpty());
     }
     catch (const FFailure& Failure) { AddError(Failure.Message); }
     return true;

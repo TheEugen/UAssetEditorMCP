@@ -1,4 +1,4 @@
-# UAsset Agent JSON protocol, version 13
+# UAsset Agent JSON protocol, version 14
 
 Targets Unreal Engine 5.4.4 normal class, Animation, Widget and Function Library Blueprints. The plugin loads the actual
 asset, edits Unreal's graph objects, compiles, and saves through `SavePackage`.
@@ -41,8 +41,8 @@ defaults to `/Game` and selects a folder recursively. Each entry contains its
 package `asset`, `object_path`, immediate `destination` (when the registry tag
 is available), `chain`, and `status`:
 
-- `resolved`: the chain ends at an on-disk asset registered at
-  `resolved_destination`.
+- `resolved`: the chain ends at an on-disk asset or at its Blueprint generated
+  class or class default object. `resolved_destination` retains the object path.
 - `missing`: a destination is empty or its package/object is absent.
 - `cycle`: a redirector appears twice in the chain.
 - `unknown`: missing/malformed metadata, a native script destination, or the
