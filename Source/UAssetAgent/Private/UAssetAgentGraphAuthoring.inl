@@ -1,5 +1,35 @@
 static UK2Node* NewGraphNode(UBlueprint* BP, UEdGraph* Graph, const FString& Kind, const FJson& Op)
 {
+    if (Kind == TEXT("layered_blend_per_bone"))
+    {
+        UAnimBlueprint* Anim = Cast<UAnimBlueprint>(BP);
+        Require(Anim && Graph->GetSchema()->IsA<UAnimationGraphSchema>(), TEXT("Layered Blend per Bone requires an animation pose graph"));
+        auto* Blend = NewObject<UAnimGraphNode_LayeredBoneBlend>(Graph);
+        const auto Layers = Array(Op, TEXT("layers"), true);
+        Require(!Layers.IsEmpty(), TEXT("Specify at least one blend layer"));
+        for (int32 Index = 0; Index < Layers.Num(); ++Index)
+        {
+            if (Index > 0) { Blend->Node.AddPose(); }
+            FJson Layer = AsObject(Layers[Index]);
+            double Weight = 1;
+            Require(!Layer->HasField(TEXT("weight")) || (Layer->TryGetNumberField(TEXT("weight"), Weight) &&
+                Weight >= 0 && Weight <= 1), TEXT("Blend weight must be between zero and one"));
+            Blend->Node.BlendWeights[Index] = float(Weight);
+            const auto Filters = Array(Layer, TEXT("branches"), true);
+            Require(!Filters.IsEmpty(), TEXT("Each layer requires at least one bone branch"));
+            for (const auto& Entry : Filters)
+            {
+                FJson Branch = AsObject(Entry);
+                auto& Filter = Blend->Node.LayerSetup[Index].BranchFilters.AddDefaulted_GetRef();
+                Filter.BoneName = FName(*String(Branch, TEXT("bone")));
+                Require(!Filter.BoneName.IsNone() && (!Anim->TargetSkeleton ||
+                    Anim->TargetSkeleton->GetReferenceSkeleton().FindBoneIndex(Filter.BoneName) != INDEX_NONE),
+                    TEXT("Unknown branch bone: ") + Filter.BoneName.ToString());
+                Filter.BlendDepth = Integer(Branch, TEXT("depth"));
+            }
+        }
+        return Blend;
+    }
     if (Kind == TEXT("cast"))
     {
         UClass* Target = LoadObject<UClass>(nullptr, *String(Op, TEXT("class")));

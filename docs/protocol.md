@@ -1,4 +1,12 @@
-# UAsset Agent JSON protocol, version 17
+# UAsset Agent JSON protocol, version 18
+
+### Layered Blend per Bone
+
+In an animation pose graph, add the node with one or more branch-filter layers. Bones are validated when the AnimBP has a target skeleton. Each layer exposes a pose and a weight pin. Connect locomotion to `BasePose`, the emote to `BlendPoses_0`, and the node's `Pose` to the downstream pose input. Further layers are evaluated in array order.
+
+```json
+{"op":"add_node","graph":"AnimGraph","kind":"layered_blend_per_bone","id":"emote","layers":[{"weight":1,"branches":[{"bone":"clavicle_l","depth":1}]}]}
+```
 
 ### Create a montage from a sequence
 

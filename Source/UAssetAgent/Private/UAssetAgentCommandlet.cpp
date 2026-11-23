@@ -91,6 +91,8 @@
 #include "AnimationModifier.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
 #include "AnimGraphNode_Base.h"
+#include "AnimGraphNode_LayeredBoneBlend.h"
+#include "AnimationGraphSchema.h"
 #include "WidgetBlueprint.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
@@ -1594,7 +1596,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 17);
+    Response->SetNumberField(TEXT("protocol_version"), 18);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }

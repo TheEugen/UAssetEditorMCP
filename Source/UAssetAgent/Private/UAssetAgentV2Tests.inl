@@ -219,6 +219,13 @@ bool FUAssetAgentV2AnimationTest::RunTest(const FString& Parameters)
         // A template's sequence node needs no concrete animation asset.
         // Remove it afterward to exercise pose disconnection and node deletion.
         FJson Delete = AnimOp(TEXT("delete_node"), Player); Editor.Apply(Delete);
+        FJson BlendOp = Json(TEXT(R"({"op":"add_node","graph":"AnimGraph","kind":"layered_blend_per_bone","id":"arms",
+            "layers":[{"branches":[{"bone":"clavicle_l","depth":2}]},{"weight":0.5,"branches":[{"bone":"clavicle_r"}]}]})"));
+        Editor.Apply(BlendOp);
+        auto* Blend = CastChecked<UAnimGraphNode_LayeredBoneBlend>(Editor.Node(Graph, TEXT("arms")));
+        TestEqual(TEXT("Left arm branch"), Blend->Node.LayerSetup[0].BranchFilters[0].BoneName, FName(TEXT("clavicle_l")));
+        TestTrue(TEXT("Both layer pins exist"), Blend->FindPin(TEXT("BlendPoses_0")) && Blend->FindPin(TEXT("BlendPoses_1")));
+        Editor.Apply(Json(TEXT(R"({"op":"connect","graph":"AnimGraph","from":{"node":"arms","pin":"Pose"},"to":{"node":"result","pin":"Result"}})")));
         Finish(Editor);
         FJson Summary = DescribeBlueprint(BP, Json(TEXT("{\"response_mode\":\"summary\"}")));
         for (const auto& Value : Array(Summary, TEXT("graphs"))) { TestFalse(TEXT("Summary omits nodes"), AsObject(Value)->HasField(TEXT("nodes"))); }
