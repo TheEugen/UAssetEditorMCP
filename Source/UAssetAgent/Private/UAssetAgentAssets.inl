@@ -60,9 +60,16 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     Require(Asset && Asset->IsAsset() && Asset->GetOutermost()->GetName() == Package &&
         !Asset->IsA<UBlueprint>() && !Asset->IsA<UObjectRedirector>() && !Asset->IsA<UWorld>(),
         TEXT("Expected a standalone non-Blueprint asset"));
+    IUAssetAgentNiagara* Niagara = nullptr;
+    if (const UClass* System = FindObject<UClass>(nullptr, TEXT("/Script/Niagara.NiagaraSystem")); System && Asset->IsA(System))
+    {
+        Niagara = FModuleManager::LoadModulePtr<IUAssetAgentNiagara>(TEXT("UAssetAgentNiagara"));
+        Require(Niagara != nullptr, TEXT("Could not load the Niagara editing module"));
+    }
     const auto Describe = [&]
     {
         Response->SetStringField(TEXT("class"), Asset->GetClass()->GetPathName());
+        if (Niagara) { Niagara->Describe(Asset, *Response); }
         if (UAnimSequence* Sequence = Cast<UAnimSequence>(Asset)) { DescribeSequence(Sequence, Response); }
         if (UAnimMontage* Montage = Cast<UAnimMontage>(Asset))
         {
@@ -108,11 +115,35 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     const auto Operations = Array(Request, TEXT("operations"), !Create);
     Require(Operations.Num() <= 1000, TEXT("At most 1000 asset operations per batch"));
     bool EditedOwnedObjects = false;
+    bool CompileNiagara = false;
     for (int32 I = 0; I < Operations.Num(); ++I)
     {
         Response->SetNumberField(TEXT("operation_index"), I);
         FJson Op = AsObject(Operations[I]);
-        if (IsOwnedObjectOperation(String(Op, TEXT("op"))))
+        const FString Kind = String(Op, TEXT("op"));
+        if (Kind == TEXT("repair_niagara_interface") || Kind == TEXT("recompile_niagara_system"))
+        {
+            Require(Niagara != nullptr, TEXT("Expected a Niagara system"));
+            if (Kind == TEXT("repair_niagara_interface"))
+            {
+                FString Error;
+                UObject* Interface = Niagara->RepairInterface(Asset, FName(*String(Op, TEXT("parameter"))), Error);
+                Require(Interface != nullptr, Error);
+                if (Op->HasField(TEXT("properties")))
+                {
+                    for (const auto& Field : Object(Op, TEXT("properties"))->Values)
+                    {
+                        FJson Edit = MakeShared<FJsonObject>();
+                        Edit->SetStringField(TEXT("op"), TEXT("set_property"));
+                        Edit->SetStringField(TEXT("property"), Field.Key);
+                        Edit->SetField(TEXT("value"), Field.Value);
+                        EditAssetProperty(Interface, Edit, false);
+                    }
+                }
+            }
+            CompileNiagara = true;
+        }
+        else if (IsOwnedObjectOperation(Kind))
         {
             EditOwnedObject(Asset, Op);
             EditedOwnedObjects = true;
@@ -121,6 +152,12 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     }
     Response->RemoveField(TEXT("operation_index"));
     if (EditedOwnedObjects) { ValidateOwnedObjectEdits(Asset, Response); }
+    if (CompileNiagara)
+    {
+        const bool Valid = Niagara->CompileSystem(Asset);
+        Response->SetBoolField(TEXT("niagara_compiled"), Valid);
+        Require(Valid, TEXT("Niagara failed system compilation or validation"));
+    }
     Describe();
     if (DryRun) { return; }
     if (Create)

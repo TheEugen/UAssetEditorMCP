@@ -14,6 +14,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 ZIP_NAME = "UAssetEditorMCP-UE5.4.4-Win64.zip"
 DLL = "Binaries/Win64/UnrealEditor-UAssetAgent.dll"
+NIAGARA_DLL = "Binaries/Win64/UnrealEditor-UAssetAgentNiagara.dll"
 MODULES = "Binaries/Win64/UnrealEditor.modules"
 PLUGIN = "UAssetAgent.uplugin"
 CLIENT_FILES = ("uasset_agent.py", "blueprint_diff.py", "configure_codex.py", "docs/protocol.md",
@@ -130,7 +131,7 @@ def main():
                         "-OutputDirectory", str(plugin)], cwd=ROOT, check=True)
         archive = work / ZIP_NAME
         with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED) as bundle:
-            for name in (PLUGIN, MODULES, DLL):
+            for name in (PLUGIN, MODULES, DLL, NIAGARA_DLL):
                 bundle.write(plugin / name, name)
             for folder in ("Source", "Config"):
                 for path in sorted((plugin / folder).rglob("*")):

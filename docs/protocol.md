@@ -1,4 +1,13 @@
-# UAsset Agent JSON protocol, version 18
+# UAsset Agent JSON protocol, version 19
+
+### Niagara user parameters
+
+`asset_inspect` returns `niagara_user_parameters` for a Niagara system. Each exposed parameter has its name, type and value or data-interface details. Use the exact parameter name for repairs. A missing interface is recreated under the system using its declared class. Existing owned interfaces retain their other settings. `asset_apply` recompiles the system and waits for validation before saving.
+
+```json
+{"op":"repair_niagara_interface","parameter":"User.SurfaceTexture","properties":{"Texture":"/Game/FX/T_Surface.T_Surface"}}
+{"op":"recompile_niagara_system"}
+```
 
 ### Layered Blend per Bone
 

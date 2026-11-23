@@ -7,5 +7,9 @@
   "Category": "Editor",
   "CanContainContent": false,
   "EnabledByDefault": true,
-  "Modules": [{"Name": "UAssetAgent", "Type": "Editor", "LoadingPhase": "Default"}]
+  "Plugins": [{"Name": "Niagara", "Enabled": true, "Optional": true}],
+  "Modules": [
+    {"Name": "UAssetAgent", "Type": "Editor", "LoadingPhase": "Default"},
+    {"Name": "UAssetAgentNiagara", "Type": "Editor", "LoadingPhase": "None"}
+  ]
 }
