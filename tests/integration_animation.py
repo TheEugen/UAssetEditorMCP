@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 import sys
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from uasset_agent import Client
@@ -39,6 +40,22 @@ def main():
     assert len(distance) > 1 and distance[0]["value"] != distance[-1]["value"], distance
     assert animation["codec"].endswith("UniformIndexable"), animation["codec"]
     print(f"{args.sequence}: {len(distance)} keys and {saved['indexed_curve_samples']} compressed samples")
+
+    montage = "/Game/__UAssetAgentTests/AM_" + uuid.uuid4().hex
+    create = {"action": "asset_create", "asset": montage, "class": "/Script/Engine.AnimMontage"}
+    invalid = client.execute(dict(create, montage={"sequence": args.sequence, "slot": "NoSuchSlot"}))
+    assert not invalid["ok"] and not invalid["saved"], invalid
+    options = {"sequence": args.sequence, "slot": "DefaultSlot"}
+    preview = client.execute(dict(create, montage=options))
+    assert preview["ok"] and not preview["saved"], preview
+    saved = client.execute(dict(create, montage=options, dry_run=False))
+    assert saved["ok"] and saved["saved"], saved
+    reopened = client.execute({"action": "asset_inspect", "asset": montage})["montage"]
+    assert reopened == saved["montage"] and reopened["root_motion"]
+    assert reopened["length"] == animation["length"] and reopened["skeleton"] == animation["skeleton"]
+    track, = reopened["tracks"]
+    assert track == {"slot": "DefaultSlot", "sequences": [args.sequence + "." + args.sequence.rsplit("/", 1)[1]]}
+    print(f"{montage}: verified slot, skeleton, source, duration and root motion after reload")
 
 
 if __name__ == "__main__":

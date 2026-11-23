@@ -82,6 +82,8 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/Skeleton.h"
 #include "Animation/AnimSequence.h"
+#include "Animation/AnimMontage.h"
+#include "Factories/AnimMontageFactory.h"
 #include "Animation/AnimCurveCompressionCodec_UniformIndexable.h"
 #include "Animation/AnimCurveCompressionSettings.h"
 #include "Animation/AnimData/IAnimationDataController.h"
@@ -1592,7 +1594,7 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 16);
+    Response->SetNumberField(TEXT("protocol_version"), 17);
     Response->SetBoolField(TEXT("saved"), false);
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }

@@ -1,5 +1,6 @@
-static UObject* CreateReflectedAsset(const FString& Package, const FString& ClassPath)
+static UObject* CreateReflectedAsset(const FString& Package, const FJson& Request)
 {
+    const FString ClassPath = String(Request, TEXT("class"));
     UClass* Class = LoadObject<UClass>(nullptr, *ClassPath);
     Require(Class && !Class->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists) &&
         !Class->IsChildOf(UBlueprint::StaticClass()) && !Class->IsChildOf(UWorld::StaticClass()),
@@ -7,6 +8,24 @@ static UObject* CreateReflectedAsset(const FString& Package, const FString& Clas
     UPackage* Outer = CreatePackage(*Package);
     const FName Name(*FPackageName::GetLongPackageAssetName(Package));
     const EObjectFlags Flags = RF_Public | RF_Standalone | RF_Transactional;
+    if (Class == UAnimMontage::StaticClass())
+    {
+        const FJson Options = Object(Request, TEXT("montage"));
+        UAnimSequence* Source = Cast<UAnimSequence>(LoadExactAsset(String(Options, TEXT("sequence"))));
+        Require(Source && Source->GetSkeleton() && Source->GetPlayLength() > 0, TEXT("Expected a nonempty sequence with a skeleton"));
+        if (Options->HasField(TEXT("skeleton")))
+        { Require(LoadExactAsset(String(Options, TEXT("skeleton"))) == Source->GetSkeleton(), TEXT("Montage and source skeletons must match")); }
+        const FName Slot(*String(Options, TEXT("slot"), TEXT("DefaultSlot"), false));
+        Require(Source->GetSkeleton()->ContainsSlotName(Slot), TEXT("Slot is not registered on the source skeleton"));
+        UAnimMontageFactory* Factory = NewObject<UAnimMontageFactory>();
+        Factory->SourceAnimation = Source;
+        UFactory* BaseFactory = Factory;
+        auto* Montage = Cast<UAnimMontage>(BaseFactory->FactoryCreateNew(Class, Outer, Name, Flags, nullptr, GWarn));
+        Require(Montage && Montage->SlotAnimTracks.Num() == 1, TEXT("Montage factory failed"));
+        Montage->SlotAnimTracks[0].SlotName = Slot;
+        return Montage;
+    }
+    Require(!Request->HasField(TEXT("montage")), TEXT("montage options require the AnimMontage class"));
     if (Class->IsChildOf(UDataAsset::StaticClass()))
     { return NewObject<UDataAsset>(Outer, Class, Name, Flags); }
     IAssetTools& Tools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
@@ -29,7 +48,7 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     if (Create)
     {
         Require(!FPackageName::DoesPackageExist(Package), TEXT("Asset already exists"));
-        Asset = CreateReflectedAsset(Package, String(Request, TEXT("class")));
+        Asset = CreateReflectedAsset(Package, Request);
     }
     else
     {
@@ -45,6 +64,26 @@ static void ReflectedAssetAction(const FString& Action, const FJson& Request, co
     {
         Response->SetStringField(TEXT("class"), Asset->GetClass()->GetPathName());
         if (UAnimSequence* Sequence = Cast<UAnimSequence>(Asset)) { DescribeSequence(Sequence, Response); }
+        if (UAnimMontage* Montage = Cast<UAnimMontage>(Asset))
+        {
+            FJson Description = MakeShared<FJsonObject>();
+            Description->SetStringField(TEXT("skeleton"), GetPathNameSafe(Montage->GetSkeleton()));
+            Description->SetBoolField(TEXT("root_motion"), Montage->HasRootMotion());
+            Description->SetNumberField(TEXT("length"), Montage->GetPlayLength());
+            TArray<TSharedPtr<FJsonValue>> Tracks;
+            for (const FSlotAnimationTrack& Track : Montage->SlotAnimTracks)
+            {
+                FJson Slot = MakeShared<FJsonObject>();
+                Slot->SetStringField(TEXT("slot"), Track.SlotName.ToString());
+                TArray<TSharedPtr<FJsonValue>> Segments;
+                for (const FAnimSegment& Segment : Track.AnimTrack.AnimSegments)
+                { Segments.Add(MakeShared<FJsonValueString>(GetPathNameSafe(Segment.GetAnimReference()))); }
+                Slot->SetArrayField(TEXT("sequences"), Segments);
+                Tracks.Add(JsonValue(Slot));
+            }
+            Description->SetArrayField(TEXT("tracks"), Tracks);
+            Response->SetObjectField(TEXT("montage"), Description);
+        }
         Response->SetObjectField(TEXT("properties"), DescribeEditableProperties(Asset));
         FJson Slots = DescribeOwnedSlots(Asset);
         if (!Slots->Values.IsEmpty()) { Response->SetObjectField(TEXT("subobjects"), Slots); }

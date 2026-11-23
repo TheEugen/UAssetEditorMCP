@@ -378,6 +378,8 @@ def tool_definitions():
           "dry_run": {"type": "boolean", "default": True}}, ["asset", "expected_revision", "operations"]),
         ("blueprint_asset_create", "Create a concrete data asset or an asset with a compatible headless factory, including initial properties and owned subobjects. Defaults to a dry run.",
          {"asset": asset, "class": {"type": "string"}, "properties": {"type": "object", "additionalProperties": {"type": "string"}},
+          "montage": {"type": "object", "properties": {"sequence": asset, "skeleton": asset, "slot": {"type": "string"}},
+                      "required": ["sequence"], "additionalProperties": False},
           "operations": {"type": "array", "items": {"type": "object"}, "maxItems": 1000},
           "dry_run": {"type": "boolean", "default": True}}, ["asset", "class"]),
         ("blueprint_material_inspect", "Inspect a Material Instance Constant, its parent and its scalar, vector, texture and static switch parameters.", {"asset": asset}, ["asset"]),

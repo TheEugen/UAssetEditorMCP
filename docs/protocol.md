@@ -1,4 +1,12 @@
-# UAsset Agent JSON protocol, version 16
+# UAsset Agent JSON protocol, version 17
+
+### Create a montage from a sequence
+
+`asset_create` accepts a `montage` object for `/Script/Engine.AnimMontage`. Unreal creates a default section and a track covering the full source sequence. The slot defaults to `DefaultSlot` and must exist on the source skeleton. An optional `skeleton` package asserts the expected skeleton. `asset_inspect` reports the saved tracks, source paths, length and root-motion flag.
+
+```json
+{"action":"asset_create","asset":"/Game/Animations/AM_Dodge","class":"/Script/Engine.AnimMontage","montage":{"sequence":"/Game/Animations/AS_Dodge","slot":"DefaultSlot"},"dry_run":true}
+```
 
 ### Animation sequences
 
