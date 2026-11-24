@@ -1938,6 +1938,7 @@ static void Execute(const FJson& Request, const FJson& Response)
 #include "UAssetAgentReplaceReferenceTests.inl"
 #include "UAssetAgentCompactTests.inl"
 #include "UAssetAgentV2Tests.inl"
+#include "UAssetAgentPIETests.inl"
 #endif
 
 UUAssetAgentCommandlet::UUAssetAgentCommandlet()
