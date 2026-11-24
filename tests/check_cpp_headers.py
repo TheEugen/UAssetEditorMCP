@@ -28,11 +28,13 @@ public: UUAssetAgentCommandlet(); virtual int32 Main(const FString& Params) over
 };'''
     translation = output / "Check.cpp"
     imports = "#undef BLUEPRINTGRAPH_API\n#define BLUEPRINTGRAPH_API DLLIMPORT\n" + "\n".join(f"#ifndef {module}_API\n#define {module}_API DLLIMPORT\n#endif" for module in
-                        ("ANIMGRAPH", "ANIMGRAPHRUNTIME", "UMG", "UMGEDITOR", "SLATECORE", "MOVIESCENE", "ASSETTOOLS", "MOVIESCENETRACKS", "SEQUENCER"))
+                        ("ANIMGRAPH", "ANIMGRAPHRUNTIME", "ANIMATIONMODIFIERS", "ANIMATIONBLUEPRINTLIBRARY",
+                         "TARGETPLATFORM", "GAMEPLAYTAGS", "RHI", "UMG", "UMGEDITOR", "SLATECORE", "MOVIESCENE",
+                         "ASSETTOOLS", "MOVIESCENETRACKS", "SEQUENCER"))
     translation.write_text(imports + "\n" + source.read_text(encoding="utf-8").replace('#include "UAssetAgentCommandlet.h"', declaration), encoding="utf-8")
-    includes = [source.parent, args.msvc / "include", args.sdk / "ucrt", args.sdk / "shared", args.sdk / "um", args.sdk / "winrt",
+    includes = [source.parent, source.parent.parent / "Public", args.msvc / "include", args.sdk / "ucrt", args.sdk / "shared", args.sdk / "um", args.sdk / "winrt",
                 engine / "Source", engine / "Source/Runtime", engine / "Source/Runtime/Core/Public/Windows",
-                engine / "Shaders/Shared"]
+                engine / "Source/Runtime/RenderCore/Internal", engine / "Shaders/Shared"]
     for folder in (engine / "Source/Runtime", engine / "Source/Editor", engine / "Source/Developer"):
         for name in ("Public", "Classes"):
             includes.extend(folder.rglob(name))
@@ -47,7 +49,8 @@ public: UUAssetAgentCommandlet(); virtual int32 Main(const FString& Params) over
     if status or not args.link:
         return status
     modules = ("Core", "CoreUObject", "Engine", "UnrealEd", "BlueprintGraph", "Kismet", "KismetCompiler", "Json",
-               "AssetRegistry", "AnimGraph", "AnimGraphRuntime", "UMG", "UMGEditor", "SlateCore", "MovieScene", "AssetTools")
+               "AssetRegistry", "AnimGraph", "AnimGraphRuntime", "AnimationModifiers", "AnimationBlueprintLibrary",
+               "TargetPlatform", "GameplayTags", "RHI", "UMG", "UMGEditor", "SlateCore", "MovieScene", "AssetTools")
     libraries = [engine / f"Intermediate/Build/Win64/x64/UnrealEditor/Development/{module}/UnrealEditor-{module}.lib" for module in modules]
     link_options = ["/NOLOGO", "/DLL", "/OUT:ApiCheck.dll", "Check.obj", "ucrt.lib", "vcruntime.lib", "msvcrt.lib", "kernel32.lib",
                     f'/LIBPATH:"{args.msvc / "lib/x64"}"',
