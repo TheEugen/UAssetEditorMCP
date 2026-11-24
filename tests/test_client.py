@@ -141,7 +141,8 @@ class McpTests(unittest.TestCase):
     def test_handshake_and_discovery(self):
         self.assertEqual(self.rpc("initialize", {"protocolVersion": "2024-11-05"})["result"]["protocolVersion"], "2024-11-05")
         names = {d["name"] for d in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(len(names), 22)
+        self.assertEqual(len(names), 23)
+        self.assertIn("blueprint_move_asset", names)
         self.assertTrue({"blueprint_asset_inspect", "blueprint_asset_apply", "blueprint_asset_create"} <= names)
         self.assertIn("blueprint_material_inspect", names)
         self.assertIn("blueprint_material_apply", names)

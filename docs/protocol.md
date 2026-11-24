@@ -1,4 +1,12 @@
-# UAsset Agent JSON protocol, version 19
+# UAsset Agent JSON protocol, version 20
+
+### Move or rename a project asset
+
+`blueprint_move_asset` moves a single standalone asset between two distinct packages under `/Game`. Preview lists the source's registry referencers, revisions, scan failures and affected Blueprint compile results. It serializes the proposed packages to scratch space and checks their hard and soft package dependencies for the old path. Review the preview, then repeat the request with `dry_run: false` and the returned `revisions` as `expected_revisions`. Saves back up every modified source file and attempt rollback on a publication failure. Set `leave_redirector: true` to retain a redirector for callers outside the registry. Split packages, occupied destinations and referencers outside writable project content block the move.
+
+```json
+{"action":"move_asset","from":"/Game/Waterline/BP_Def_Hole","to":"/Game/Polynesien/BP_Def_Hole","leave_redirector":false}
+```
 
 ### Niagara user parameters
 

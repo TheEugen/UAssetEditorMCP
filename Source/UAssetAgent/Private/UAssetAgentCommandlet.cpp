@@ -25,6 +25,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "WorldPartition/WorldPartitionActorDescInstance.h"
 #include "WorldPartition/WorldPartitionHelpers.h"
+#include "Misc/RedirectCollector.h"
 #include "Engine/InheritableComponentHandler.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -71,6 +72,7 @@
 #include "Materials/MaterialInstanceConstant.h"
 #include "MaterialShared.h"
 #include "Serialization/ArchiveReplaceObjectRef.h"
+#include "Serialization/ArchiveProxy.h"
 #include "Serialization/ArchiveReplaceObjectAndStructPropertyRef.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -1551,6 +1553,7 @@ static FJson DescribeRedirector(IAssetRegistry& Registry, const FAssetData& Asse
 #include "UAssetAgentLevels.inl"
 #include "UAssetAgentReferences.inl"
 #include "UAssetAgentReplaceReferences.inl"
+#include "UAssetAgentMove.inl"
 #include "UAssetAgentFunctionLibrary.inl"
 
 static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
@@ -1597,8 +1600,9 @@ static TArray<FMemberDependent> CaptureMemberDependents(UBlueprint* Blueprint,
 static void Execute(const FJson& Request, const FJson& Response)
 {
     FString Action = String(Request, TEXT("action"));
-    Response->SetNumberField(TEXT("protocol_version"), 19);
+    Response->SetNumberField(TEXT("protocol_version"), 20);
     Response->SetBoolField(TEXT("saved"), false);
+    if (Action == TEXT("move_asset")) { MoveAssetAction(Request, Response); return; }
     if (Action == TEXT("asset_inspect") || Action == TEXT("asset_apply") || Action == TEXT("asset_create"))
     { ReflectedAssetAction(Action, Request, Response); return; }
     if (Action == TEXT("replace_references")) { ReplaceReferencesAction(Request, Response); return; }
